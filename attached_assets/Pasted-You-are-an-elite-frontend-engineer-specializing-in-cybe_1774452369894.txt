@@ -1,0 +1,1655 @@
+You are an elite frontend engineer specializing in cybersecurity product interfaces, real-time dashboards, and enterprise-grade UI systems. You have deep expertise in React, Vite, TypeScript, Tailwind CSS, and data-heavy dashboard design. You are building a portfolio-grade project that must look, feel, and function like a production SOC analyst tool.
+
+==================================================
+GOAL
+==================================================
+
+Build the complete frontend for "SecOps Console" — a mini SIEM (Security Information and Event Management) web application with a detection engine UI. This is a SOC-style security operations dashboard that displays security logs from multiple sources, runs detection rules against them, generates alerts mapped to MITRE ATT&CK, and provides a full analyst investigation workflow.
+
+There is NO backend. All data is mock data stored locally. All interactions use local state. The architecture must be cleanly separated so that mock data services can be swapped for real API calls later with minimal refactoring.
+
+Do NOT skip any page. Do NOT simplify any feature. Do NOT use placeholder text where real mock data should exist. Every page must be fully functional with working search, filters, sorting, clicking, status changes, and navigation.
+
+==================================================
+TECH STACK (MANDATORY)
+==================================================
+
+- React 18+ with functional components and hooks
+- Vite as build tool
+- TypeScript (strict mode)
+- Tailwind CSS for all styling (dark theme)
+- React Router v6 for routing and navigation
+- Recharts for all charts and visualizations
+- Lucide React or Heroicons for icons
+- date-fns for date/time formatting
+- uuid for generating IDs in mock data
+- Zustand for global state management (alerts, filters, selected items, workflow status)
+- No other UI framework (no MUI, no Ant Design, no Chakra — raw Tailwind only)
+
+==================================================
+VISUAL DESIGN SPECIFICATION
+==================================================
+
+Theme: Dark cybersecurity operations center
+
+Color palette:
+- Background primary: #0a0e1a (deep navy black)
+- Background secondary: #111827 (dark card surfaces)
+- Background tertiary: #1e293b (elevated panels, table rows on hover)
+- Border color: #1e3a5f (subtle blue-tinted borders)
+- Text primary: #e2e8f0 (light gray white)
+- Text secondary: #94a3b8 (muted gray)
+- Text muted: #64748b (dim labels)
+- Accent primary: #3b82f6 (blue — interactive elements, links, active states)
+- Accent secondary: #06b6d4 (cyan — charts, highlights)
+- Severity Critical: #ef4444 (red)
+- Severity High: #f97316 (orange)
+- Severity Medium: #eab308 (yellow)
+- Severity Low: #22c55e (green)
+- Severity Info: #6366f1 (indigo)
+- Status New: #3b82f6 (blue badge)
+- Status Investigating: #f59e0b (amber badge)
+- Status Resolved: #10b981 (green badge)
+- Status False Positive: #6b7280 (gray badge)
+- Success: #10b981
+- Warning: #f59e0b
+- Error: #ef4444
+
+Typography:
+- Font family: "Inter" from Google Fonts, fallback to system sans-serif
+- Monospace font for log entries, IPs, hashes, rule syntax: "JetBrains Mono" or "Fira Code", fallback to monospace
+- Base size: 14px
+- Headings: semibold/bold, sizes from 2xl down to sm based on hierarchy
+
+Layout:
+- Fixed left sidebar: 256px wide, collapsible to 64px icon-only mode
+- Top header bar: 64px tall, fixed, spans the content area to the right of sidebar
+- Main content area: scrollable, padded 24px
+- Max content width: none (full width fluid)
+- Cards: rounded-lg, border border-[#1e3a5f], bg-[#111827], shadow-lg
+- Tables: full-width, striped rows with hover states, sticky header
+- Modals: centered overlay with backdrop blur
+- Drawers: right-side slide-in panel, 50% width on desktop, full width on tablet
+
+Component styling rules:
+- All buttons: rounded-md, clear hover/active/disabled states
+- Badges: rounded-full, px-2.5 py-0.5, text-xs font-medium
+- Inputs: dark background (#0f172a), border-[#1e3a5f], focus ring blue
+- Dropdowns: dark background, border, hover highlight
+- Tabs: underline style with active indicator
+- Tooltips: dark bg, small text, arrow pointer
+- Transitions: all interactive elements have transition-all duration-200
+
+Responsive breakpoints:
+- Desktop: ≥1280px (full layout)
+- Tablet: 768px–1279px (sidebar collapses to icon mode, tables scroll horizontally, drawer goes full width)
+- No mobile support required
+
+==================================================
+FILE AND FOLDER STRUCTURE (MANDATORY)
+==================================================
+
+
+secops-console/
+├── index.html
+├── vite.config.ts
+├── tsconfig.json
+├── tailwind.config.ts
+├── postcss.config.js
+├── package.json
+├── public/
+│ └── favicon.svg
+├── src/
+│ ├── main.tsx
+│ ├── App.tsx
+│ ├── index.css (Tailwind directives, global styles, font imports)
+│ ├── routes.tsx (React Router route definitions)
+│ │
+│ ├── components/
+│ │ ├── layout/
+│ │ │ ├── Sidebar.tsx (Navigation sidebar with collapsible toggle)
+│ │ │ ├── TopBar.tsx (Header bar with search, notifications, user)
+│ │ │ ├── MainLayout.tsx (Layout wrapper: sidebar + topbar + content area)
+│ │ │ └── PageContainer.tsx (Consistent page wrapper with title and breadcrumb)
+│ │ │
+│ │ ├── common/
+│ │ │ ├── Badge.tsx (Severity and status badges)
+│ │ │ ├── Button.tsx (Primary, secondary, danger, ghost variants)
+│ │ │ ├── Card.tsx (Standard card container)
+│ │ │ ├── DataTable.tsx (Reusable sortable, filterable table)
+│ │ │ ├── Modal.tsx (Centered modal with overlay)
+│ │ │ ├── Drawer.tsx (Right slide-in panel)
+│ │ │ ├── SearchInput.tsx (Search bar with icon)
+│ │ │ ├── FilterBar.tsx (Multi-select filters row)
+│ │ │ ├── DropdownSelect.tsx (Styled dropdown)
+│ │ │ ├── Tabs.tsx (Tab navigation component)
+│ │ │ ├── Timeline.tsx (Vertical timeline for event sequences)
+│ │ │ ├── StatusBadge.tsx (Alert lifecycle status badge)
+│ │ │ ├── SeverityBadge.tsx (Severity level badge)
+│ │ │ ├── EmptyState.tsx (Empty state illustration and message)
+│ │ │ ├── LoadingState.tsx (Skeleton loaders and spinners)
+│ │ │ ├── ErrorState.tsx (Error display with retry)
+│ │ │ ├── Tooltip.tsx (Hover tooltip)
+│ │ │ ├── ConfirmDialog.tsx (Confirmation modal for destructive actions)
+│ │ │ ├── CodeBlock.tsx (Syntax-highlighted code/log display)
+│ │ │ └── StatCard.tsx (Metric card with icon, value, label, trend)
+│ │ │
+│ │ ├── dashboard/
+│ │ │ ├── AlertSeverityChart.tsx (Donut chart: alerts by severity)
+│ │ │ ├── AlertTrendChart.tsx (Area chart: alerts over time, 24h/7d/30d)
+│ │ │ ├── TopDetectionRulesChart.tsx (Horizontal bar chart: top triggered rules)
+│ │ │ ├── LogSourceDistribution.tsx (Pie chart: log volume by source)
+│ │ │ ├── RecentAlerts.tsx (Mini table: last 10 alerts)
+│ │ │ ├── MitreHeatmapMini.tsx (Mini ATT&CK heatmap widget)
+│ │ │ ├── SystemHealthWidget.tsx (Log ingestion rate, parser status)
+│ │ │ └── AnalystWorkloadWidget.tsx (Alerts per analyst, SLA status)
+│ │ │
+│ │ ├── logs/
+│ │ │ ├── LogsTable.tsx (Full logs table with expandable rows)
+│ │ │ ├── LogDetailPanel.tsx (Drawer showing parsed log detail)
+│ │ │ ├── LogFilterSidebar.tsx (Left filter panel for log source, severity, time)
+│ │ │ └── RawLogViewer.tsx (Raw log text with syntax coloring)
+│ │ │
+│ │ ├── alerts/
+│ │ │ ├── AlertQueue.tsx (Alert list with filters and bulk actions)
+│ │ │ ├── AlertRow.tsx (Single alert row in queue)
+│ │ │ ├── AlertDetailView.tsx (Full alert detail page/panel)
+│ │ │ ├── AlertTimeline.tsx (Event timeline for a single alert)
+│ │ │ ├── AlertActions.tsx (Status change, assign, escalate buttons)
+│ │ │ ├── RelatedEventsTable.tsx (Correlated log events for an alert)
+│ │ │ └── AISummaryPlaceholder.tsx (AI-generated incident summary placeholder)
+│ │ │
+│ │ ├── rules/
+│ │ │ ├── RulesTable.tsx (Detection rules list)
+│ │ │ ├── RuleDetailView.tsx (Rule detail with YAML preview)
+│ │ │ ├── RuleBuilder.tsx (Visual rule builder form)
+│ │ │ ├── RuleConditionEditor.tsx (Condition logic editor)
+│ │ │ ├── RuleTestPanel.tsx (Test rule against sample logs)
+│ │ │ └── RuleYamlPreview.tsx (Live YAML output preview)
+│ │ │
+│ │ ├── mitre/
+│ │ │ ├── MitreMatrix.tsx (Full ATT&CK matrix grid)
+│ │ │ ├── MitreTechniqueCard.tsx (Technique detail popup)
+│ │ │ └── MitreCoverageBar.tsx (Coverage summary bar)
+│ │ │
+│ │ ├── ingestion/
+│ │ │ ├── LogSourceList.tsx (Configured log sources)
+│ │ │ ├── ParserPreview.tsx (Parser input/output preview)
+│ │ │ ├── SampleLogUploader.tsx (Paste or upload sample log)
+│ │ │ └── SchemaViewer.tsx (Unified schema field reference)
+│ │ │
+│ │ └── settings/
+│ │ ├── GeneralSettings.tsx (App preferences)
+│ │ ├── NotificationSettings.tsx (Alert notification config)
+│ │ └── UserProfile.tsx (Mock user profile)
+│ │
+│ ├── pages/
+│ │ ├── DashboardPage.tsx
+│ │ ├── LogsExplorerPage.tsx
+│ │ ├── AlertQueuePage.tsx
+│ │ ├── AlertDetailPage.tsx
+│ │ ├── DetectionRulesPage.tsx
+│ │ ├── RuleBuilderPage.tsx
+│ │ ├── MitreAttackPage.tsx
+│ │ ├── LogIngestionPage.tsx
+│ │ └── SettingsPage.tsx
+│ │
+│ ├── data/
+│ │ ├── mockLogs.ts (200+ mock log entries across all 6 sources)
+│ │ ├── mockAlerts.ts (50+ mock alerts with full detail)
+│ │ ├── mockRules.ts (All 6 detection rules + 4 extras fully defined)
+│ │ ├── mockMitre.ts (MITRE ATT&CK tactics, techniques, mapping data)
+│ │ ├── mockUsers.ts (Mock analyst users)
+│ │ ├── mockLogSources.ts (Log source configuration data)
+│ │ ├── mockParsers.ts (Parser definitions with sample input/output)
+│ │ └── unifiedSchema.ts (Unified log schema type definition and field list)
+│ │
+│ ├── services/
+│ │ ├── logService.ts (Functions: getLogs, searchLogs, filterLogs, getLogById)
+│ │ ├── alertService.ts (Functions: getAlerts, getAlertById, updateAlertStatus, assignAlert, getAlertHistory)
+│ │ ├── ruleService.ts (Functions: getRules, getRuleById, createRule, updateRule, deleteRule, testRule)
+│ │ ├── mitreService.ts (Functions: getTactics, getTechniques, getCoverage)
+│ │ ├── dashboardService.ts (Functions: getStats, getAlertTrend, getTopRules, getLogDistribution)
+│ │ └── ingestionService.ts (Functions: getLogSources, parseLog, getSchema)
+│ │
+│ ├── store/
+│ │ ├── useAlertStore.ts (Zustand store for alert state and workflow)
+│ │ ├── useLogStore.ts (Zustand store for log explorer state)
+│ │ ├── useRuleStore.ts (Zustand store for rules management)
+│ │ ├── useFilterStore.ts (Zustand store for global filter state)
+│ │ └── useUIStore.ts (Zustand store for sidebar collapse, drawer open, modal state)
+│ │
+│ ├── hooks/
+│ │ ├── useDebounce.ts (Debounce hook for search)
+│ │ ├── usePagination.ts (Pagination logic hook)
+│ │ ├── useSortable.ts (Column sort logic hook)
+│ │ └── useFilteredData.ts (Combined filter + search + sort hook)
+│ │
+│ ├── utils/
+│ │ ├── severityUtils.ts (Severity color, icon, label mapping)
+│ │ ├── statusUtils.ts (Status color, icon, label, transition mapping)
+│ │ ├── dateUtils.ts (Relative time, formatting, range checks)
+│ │ ├── logParser.ts (Mock log parsing/normalization functions)
+│ │ ├── scoringEngine.ts (Alert severity scoring algorithm)
+│ │ ├── searchUtils.ts (Text search across object fields)
+│ │ ├── exportUtils.ts (Export data to JSON/CSV)
+│ │ └── formatUtils.ts (Number formatting, truncation, IP formatting)
+│ │
+│ └── types/
+│ ├── log.ts (UnifiedLog, RawLog, LogSource types)
+│ ├── alert.ts (Alert, AlertStatus, AlertSeverity, AlertAction types)
+│ ├── rule.ts (DetectionRule, RuleCondition, RuleAction types)
+│ ├── mitre.ts (Tactic, Technique, MitreMapping types)
+│ ├── dashboard.ts (DashboardStats, ChartData types)
+│ └── common.ts (Pagination, SortConfig, FilterConfig, TimeRange types)
+
+text
+
+==================================================
+TYPE DEFINITIONS (MANDATORY)
+==================================================
+
+Create these TypeScript types exactly. All mock data and components must conform to them.
+
+```typescript
+// types/log.ts
+export type LogSourceType = 'windows_event' | 'linux_syslog' | 'linux_auth' | 'firewall' | 'auth' | 'apache_access';
+
+export interface RawLog {
+  id: string;
+  source: LogSourceType;
+  rawText: string;
+  receivedAt: string; // ISO timestamp
+}
+
+export interface UnifiedLog {
+  id: string;
+  timestamp: string;             // ISO timestamp of the event
+  source: LogSourceType;
+  sourceIp: string;
+  destinationIp?: string;
+  sourcePort?: number;
+  destinationPort?: number;
+  hostname: string;
+  username?: string;
+  eventType: string;              // e.g., "authentication_failure", "process_creation", "connection_blocked"
+  action: string;                 // e.g., "blocked", "allowed", "failed", "success"
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  message: string;
+  rawLog: string;                 // Original raw log text
+  parsedFields: Record<string, string | number | boolean>;
+  tags: string[];
+}
+
+export interface LogSource {
+  id: string;
+  name: string;
+  type: LogSourceType;
+  status: 'active' | 'inactive' | 'error';
+  eventsPerSecond: number;
+  lastEventAt: string;
+  parser: string;
+  description: string;
+}
+
+// types/alert.ts
+export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type AlertStatus = 'new' | 'investigating' | 'resolved' | 'false_positive';
+
+export interface Alert {
+  id: string;
+  title: string;
+  description: string;
+  severity: AlertSeverity;
+  status: AlertStatus;
+  source: LogSourceType;
+  ruleId: string;
+  ruleName: string;
+  createdAt: string;              // ISO timestamp
+  updatedAt: string;              // ISO timestamp
+  assignedTo?: string;            // Analyst name
+  mitreTactic: string;
+  mitreTechnique: string;
+  mitreId: string;                // e.g., "T1110.001"
+  affectedAssets: string[];       // Hostnames or IPs
+  eventCount: number;             // Number of correlated events
+  relatedLogIds: string[];        // References to UnifiedLog.id
+  score: number;                  // 0-100 severity score
+  timeline: AlertTimelineEvent[];
+  tags: string[];
+  aiSummary?: string;             // Placeholder AI-generated summary
+}
+
+export interface AlertTimelineEvent {
+  id: string;
+  timestamp: string;
+  type: 'detection' | 'status_change' | 'assignment' | 'comment' | 'escalation';
+  description: string;
+  actor: string;                  // System or analyst name
+}
+
+export interface AlertAction {
+  type: 'status_change' | 'assign' | 'escalate' | 'comment' | 'tag';
+  payload: Record<string, string>;
+  performedBy: string;
+  performedAt: string;
+}
+
+// types/rule.ts
+export type RuleStatus = 'enabled' | 'disabled' | 'testing';
+export type RuleSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface DetectionRule {
+  id: string;
+  name: string;
+  description: string;
+  severity: RuleSeverity;
+  status: RuleStatus;
+  logSources: LogSourceType[];
+  conditions: RuleCondition[];
+  conditionLogic: string;         // e.g., "1 AND 2" or "1 OR (2 AND 3)"
+  threshold?: {
+    count: number;
+    timeWindowMinutes: number;
+    groupBy?: string;
+  };
+  mitreTactic: string;
+  mitreTechnique: string;
+  mitreId: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  author: string;
+  falsePositiveRate?: number;     // 0-100
+  alertCount: number;             // Total alerts generated
+  yamlDefinition: string;         // Sigma-like YAML representation
+}
+
+export interface RuleCondition {
+  id: string;
+  field: string;                  // e.g., "eventType", "sourceIp", "username"
+  operator: 'equals' | 'not_equals' | 'contains' | 'not_contains' | 'greater_than' | 'less_than' | 'in' | 'not_in' | 'regex';
+  value: string | number | string[];
+}
+
+// types/mitre.ts
+export interface MitreTactic {
+  id: string;                     // e.g., "TA0001"
+  name: string;                   // e.g., "Initial Access"
+  description: string;
+  techniques: MitreTechnique[];
+  order: number;
+}
+
+export interface MitreTechnique {
+  id: string;                     // e.g., "T1110"
+  name: string;                   // e.g., "Brute Force"
+  tacticId: string;
+  description: string;
+  subtechniques?: MitreTechnique[];
+  detectionRuleIds: string[];     // Rules that cover this technique
+  alertCount: number;             // Alerts mapped to this technique
+  covered: boolean;               // Has at least one detection rule
+}
+
+// types/dashboard.ts
+export interface DashboardStats {
+  totalLogs: number;
+  totalAlerts: number;
+  criticalAlerts: number;
+  openAlerts: number;
+  resolvedToday: number;
+  meanTimeToRespond: number;      // minutes
+  logIngestionRate: number;       // events per second
+  activeRules: number;
+  mitreCoverage: number;          // percentage
+}
+
+// types/common.ts
+export interface PaginationState {
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface SortConfig {
+  field: string;
+  direction: 'asc' | 'desc';
+}
+
+export interface FilterConfig {
+  field: string;
+  values: string[];
+}
+
+export type TimeRange = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom';
+
+==================================================
+MOCK DATA REQUIREMENTS (MANDATORY)
+
+Generate realistic, internally consistent mock data. All IDs must cross-reference correctly (alert.relatedLogIds must point to real log IDs, alert.ruleId must point to a real rule ID, etc.).
+
+mockLogs.ts:
+
+Generate exactly 250 mock log entries
+
+Distribute across all 6 log source types roughly equally
+
+Include realistic IP addresses (use 10.x.x.x and 192.168.x.x ranges)
+
+Include realistic hostnames (e.g., "DC-01", "WEB-PROD-03", "FW-EDGE-01", "LNX-DB-02")
+
+Include realistic usernames (e.g., "jsmith", "admin", "svc_backup", "root")
+
+Timestamps should span the last 7 days with clustering around recent hours
+
+Raw log text must look authentic for each source type:
+
+Windows Event: XML-style with EventID, Channel, Computer
+
+Linux syslog: standard syslog format with facility, severity, daemon
+
+Linux auth.log: PAM and sshd authentication messages
+
+Firewall: Netfilter/iptables or Palo Alto style with zones, action, ports
+
+Auth logs: Generic authentication with success/failure, method, source
+
+Apache access: Combined log format with method, path, status, user-agent
+
+ParsedFields must contain at least 5 relevant key-value pairs per log
+
+mockAlerts.ts:
+
+Generate exactly 60 mock alerts
+
+Distribution: 5 critical, 12 high, 20 medium, 15 low, 8 info
+
+Status distribution: 20 new, 15 investigating, 18 resolved, 7 false_positive
+
+Each alert must have 2-8 relatedLogIds pointing to actual log IDs
+
+Each alert must have a realistic timeline with 2-6 events
+
+Each alert must map to a specific MITRE technique
+
+AI summary placeholder text for at least 10 alerts (2-3 sentence professional incident summary)
+
+Score must correlate with severity (critical: 85-100, high: 65-84, medium: 40-64, low: 15-39, info: 0-14)
+
+mockRules.ts:
+
+Include exactly these 10 detection rules, fully defined with YAML:
+
+"Brute Force SSH Login Attempts"
+
+Detects 5+ failed SSH logins from same source IP within 10 minutes
+
+MITRE: T1110.001 (Credential Access → Brute Force: Password Guessing)
+
+Severity: high
+
+"Failed Login Threshold Exceeded"
+
+Detects 10+ failed logins for same username across any source within 15 minutes
+
+MITRE: T1110 (Credential Access → Brute Force)
+
+Severity: high
+
+"Off-Hours Privileged Access"
+
+Detects privileged account login between 22:00-06:00 or on weekends
+
+MITRE: T1078 (Defense Evasion → Valid Accounts)
+
+Severity: medium
+
+"Impossible Travel Detection"
+
+Detects same user logging in from geographically distant IPs within 30 minutes
+
+MITRE: T1078.004 (Defense Evasion → Valid Accounts: Cloud Accounts)
+
+Severity: critical
+
+"Port Scan Pattern Detected"
+
+Detects single source IP connecting to 20+ unique destination ports within 5 minutes
+
+MITRE: T1046 (Discovery → Network Service Discovery)
+
+Severity: medium
+
+"Privilege Escalation Attempt"
+
+Detects sudo/su usage by non-standard accounts or EventID 4672/4673 on Windows
+
+MITRE: T1548 (Privilege Escalation → Abuse Elevation Control Mechanism)
+
+Severity: critical
+
+"Suspicious Process Execution"
+
+Detects execution of known suspicious binaries (powershell with encoded command, certutil download, etc.)
+
+MITRE: T1059 (Execution → Command and Scripting Interpreter)
+
+Severity: high
+
+"Data Exfiltration Indicator"
+
+Detects outbound data transfer exceeding 500MB to external IP
+
+MITRE: T1041 (Exfiltration → Exfiltration Over C2 Channel)
+
+Severity: critical
+
+"Firewall Rule Modification"
+
+Detects changes to firewall rules or policies
+
+MITRE: T1562.004 (Defense Evasion → Impair Defenses: Disable or Modify System Firewall)
+
+Severity: high
+
+"Multiple Account Lockouts"
+
+Detects 3+ account lockouts across the domain within 10 minutes
+
+MITRE: T1110.001 (Credential Access → Brute Force)
+
+Severity: medium
+
+Each rule MUST include a complete yamlDefinition string that looks like a real Sigma rule:
+
+YAML
+
+title: Rule Name
+id: uuid
+status: production
+level: high
+description: Full description
+author: SecOps Console
+date: 2024/01/15
+logsource:
+    category: authentication
+    product: linux
+detection:
+    selection:
+        eventType: authentication_failure
+    condition: selection | count(sourceIp) > 5
+    timeframe: 10m
+falsepositives:
+    - Legitimate admin activity
+tags:
+    - attack.credential_access
+    - attack.t1110.001
+
+mockMitre.ts:
+
+Include these MITRE ATT&CK tactics (in correct order):
+
+Reconnaissance (TA0043)
+
+Initial Access (TA0001)
+
+Execution (TA0002)
+
+Persistence (TA0003)
+
+Privilege Escalation (TA0004)
+
+Defense Evasion (TA0005)
+
+Credential Access (TA0006)
+
+Discovery (TA0007)
+
+Lateral Movement (TA0008)
+
+Collection (TA0009)
+
+Command and Control (TA0011)
+
+Exfiltration (TA0010)
+
+Impact (TA0040)
+
+For each tactic, include 4-8 techniques with proper IDs
+
+Mark techniques as "covered" if a detection rule maps to them
+
+Include alertCount from mock alerts
+
+mockUsers.ts:
+
+5 mock analyst users with name, email, role (Tier 1 Analyst, Tier 2 Analyst, Senior Analyst, SOC Manager, Threat Hunter), avatar placeholder URL, and alert assignment counts
+
+==================================================
+PAGE-BY-PAGE SPECIFICATION
+
+--- PAGE 1: DASHBOARD OVERVIEW ---
+Route: /
+Components: StatCard (x8), AlertSeverityChart, AlertTrendChart, TopDetectionRulesChart, LogSourceDistribution, RecentAlerts, MitreHeatmapMini, SystemHealthWidget, AnalystWorkloadWidget
+
+Layout:
+
+Top row: 4 stat cards in a row
+
+Total Alerts (number + trend arrow + percentage change)
+
+Critical/High Open (number, red/orange accent)
+
+Mean Time to Respond (minutes, with target comparison)
+
+MITRE Coverage (percentage with mini progress bar)
+
+Second row: 4 more stat cards
+
+Total Logs Ingested (formatted number like "1.2M")
+
+Log Ingestion Rate (events/sec with sparkline)
+
+Active Detection Rules (number)
+
+Resolved Today (number with trend)
+
+Third row: 2 charts side by side
+
+Left: Alert Trend Chart (area chart, toggleable time range: 24h / 7d / 30d)
+
+Right: Alert Severity Distribution (donut chart with legend and counts)
+
+Fourth row: 2 charts side by side
+
+Left: Top 10 Triggered Detection Rules (horizontal bar chart)
+
+Right: Log Source Distribution (pie chart showing volume per source type)
+
+Fifth row: full width
+
+Recent Alerts mini table (last 10 alerts: time, title, severity badge, status badge, assigned to)
+
+Each row clickable → navigates to /alerts/:id
+
+Sixth row: 2 widgets side by side
+
+Left: Mini MITRE ATT&CK heatmap (simplified grid showing coverage with color intensity)
+
+Right: Analyst Workload (bar chart showing open alerts per analyst)
+
+Bottom row: System Health
+
+Log source status indicators (green/yellow/red dots)
+
+Parser health status
+
+Last updated timestamp with auto-refresh indicator
+
+Interactions:
+
+Time range toggle on charts updates chart data
+
+Clicking any stat card navigates to the relevant page
+
+Clicking chart segments filters and navigates
+
+Auto-refresh indicator (visual only, no actual polling needed)
+
+--- PAGE 2: LOGS EXPLORER ---
+Route: /logs
+Components: LogFilterSidebar, SearchInput, LogsTable, LogDetailPanel (Drawer), RawLogViewer
+
+Layout:
+
+Left sidebar filter panel (240px, collapsible):
+
+Time range picker (preset ranges + custom date range)
+
+Log source checkboxes (all 6 types)
+
+Severity checkboxes
+
+Event type dropdown (multi-select)
+
+Hostname search
+
+Username search
+
+IP address search
+
+"Apply Filters" button + "Clear All" link
+
+Active filter count badge
+
+Main content area:
+
+Search bar at top (full-text search across all log fields)
+
+Results count and pagination info
+
+Logs table columns:
+
+Timestamp (sortable, formatted as "Jan 15, 2024 14:32:07")
+
+Source (badge with log source type icon)
+
+Hostname
+
+Event Type
+
+Severity (colored badge)
+
+Source IP
+
+Username
+
+Message (truncated to 80 chars)
+
+Actions (view button)
+
+Table features:
+
+Click any column header to sort
+
+Hover row for highlight
+
+Click row to open detail drawer
+
+Pagination at bottom (10/25/50/100 per page)
+
+"Showing X-Y of Z results"
+
+Detail Drawer (right side, 50% width):
+
+Parsed log detail with all fields in a key-value table
+
+Raw log text in a code block with monospace font
+
+"View Related Alerts" button (if any alerts reference this log)
+
+"Copy Raw Log" button
+
+Tabs: "Parsed Fields" | "Raw Log" | "Related Alerts"
+
+Close button
+
+Interactions:
+
+Search is debounced (300ms) and searches across message, hostname, username, sourceIp, eventType
+
+Filters update the table in real-time (no submit button needed, or both modes)
+
+Sort toggles asc/desc on click, shows arrow indicator
+
+Drawer slides in with transition animation
+
+Empty state shown when no results match filters
+
+Loading skeleton shown briefly on initial render (simulated with setTimeout)
+
+--- PAGE 3: ALERT QUEUE ---
+Route: /alerts
+Components: AlertQueue, AlertRow, FilterBar, SearchInput, Badge, StatusBadge, SeverityBadge
+
+Layout:
+
+Top bar:
+
+Search input (search alert title, description, affected assets)
+
+Filter buttons row:
+
+Severity filter (multi-select: Critical, High, Medium, Low, Info)
+
+Status filter (multi-select: New, Investigating, Resolved, False Positive)
+
+Time range filter (1h, 6h, 24h, 7d, 30d)
+
+Assigned To filter (dropdown of analysts)
+
+MITRE Tactic filter (dropdown)
+
+Sort dropdown (Newest, Oldest, Highest Severity, Most Events)
+
+Bulk actions: "Mark as Investigating", "Mark as Resolved", "Assign To" (visible when rows selected)
+
+Active filter pills with X to remove
+
+Results count
+
+Alert list (card-based, not pure table):
+
+Each alert card shows:
+
+Checkbox for bulk selection
+
+Severity badge (left accent border color matches severity)
+
+Alert title (bold, clickable)
+
+Alert description (truncated, 1 line)
+
+MITRE technique badge (e.g., "T1110.001 Brute Force")
+
+Status badge
+
+Time ago (e.g., "23 minutes ago")
+
+Affected assets (hostname badges, max 3 shown + "+N more")
+
+Event count
+
+Assigned analyst (avatar + name or "Unassigned")
+
+Score (numeric badge, color-coded)
+
+Hover: subtle elevation
+
+Click: navigate to /alerts/:id
+
+Pagination at bottom
+
+Interactions:
+
+All filters work on mock data and update instantly
+
+Bulk selection with "Select All" toggle
+
+Bulk actions update status for all selected alerts
+
+Clicking alert title navigates to detail page
+
+URL query params should reflect active filters (so page state survives refresh in future)
+
+Empty state when no alerts match
+
+Badge counts update when filters change (e.g., "5 Critical" in the severity filter button)
+
+--- PAGE 4: ALERT DETAIL VIEW ---
+Route: /alerts/:id
+Components: AlertDetailView, AlertTimeline, AlertActions, RelatedEventsTable, AISummaryPlaceholder, Badge, Timeline, Tabs
+
+Layout:
+
+Back button: "← Back to Alert Queue"
+
+Alert header section:
+
+Alert title (large)
+
+Severity badge + Status badge + Score badge
+
+Created time + Updated time
+
+MITRE mapping: Tactic → Technique (clickable, links to MITRE page)
+
+Assigned analyst (with reassign dropdown)
+
+Tags (editable, add/remove)
+
+Action bar:
+
+Status workflow buttons:
+
+If New: "Start Investigation" → changes to Investigating
+
+If Investigating: "Resolve" → changes to Resolved, "Mark False Positive" → changes to False Positive
+
+If Resolved/False Positive: "Reopen" → changes back to New
+
+"Escalate" button
+
+"Export" button (downloads alert as JSON)
+
+Tabs below header:
+
+Tab 1: "Overview"
+
+AI Incident Summary (card with robot icon, shows aiSummary or placeholder text "AI analysis will appear here when backend is connected. This feature uses LLM-based log correlation and threat intelligence to generate a concise incident summary for the analyst.")
+
+Alert description (full text)
+
+Affected assets list (hostnames and IPs in a grid)
+
+Detection rule reference (card showing rule name, click to navigate to rule)
+
+Key indicators section (extracted IOCs: IPs, usernames, hostnames)
+
+Tab 2: "Timeline"
+
+Vertical timeline component showing all AlertTimelineEvents
+
+Each event: icon (based on type), timestamp, description, actor
+
+Newest events at top
+
+"Add Comment" form at bottom (text input + submit, adds to local timeline)
+
+Tab 3: "Related Events"
+
+Table showing all correlated log entries (from relatedLogIds)
+
+Same columns as Logs Explorer table
+
+Click row to expand and show full log detail inline
+
+Tab 4: "MITRE Context"
+
+Shows the specific technique detail
+
+Description of the technique
+
+Other alerts mapped to the same technique
+
+Detection coverage information
+
+Interactions:
+
+Status changes update immediately in UI (Zustand store) with transition animation on badge
+
+Adding a comment appends to the timeline with current timestamp and "Current Analyst" as actor
+
+Reassign updates the assignedTo field
+
+Export generates a JSON file download of the alert object
+
+All navigation (back, rule link, MITRE link) works with React Router
+
+Show confirmation dialog for status changes
+
+--- PAGE 5: DETECTION RULES ---
+Route: /rules
+Components: RulesTable, FilterBar, SearchInput, Badge, Modal
+
+Layout:
+
+Top bar:
+
+Search input (search rule name, description)
+
+Filters: Severity, Status (enabled/disabled/testing), Log Source, MITRE Tactic
+
+"Create New Rule" button (navigates to /rules/builder)
+
+Sort: Name, Severity, Alert Count, Last Updated
+
+Rules table:
+
+Columns:
+
+Status toggle (enabled/disabled switch)
+
+Rule Name (bold, clickable)
+
+Severity badge
+
+Log Sources (badges)
+
+MITRE Mapping (technique ID + name)
+
+Alert Count (number)
+
+False Positive Rate (percentage with color: green < 10%, yellow 10-30%, red > 30%)
+
+Last Updated (relative time)
+
+Actions (View, Edit, Duplicate, Delete)
+
+Click row: opens rule detail in a modal or navigates to detail view
+
+Hover: highlight
+
+Pagination
+
+Rule Detail Modal/View:
+
+Full rule info
+
+Conditions displayed in human-readable format
+
+YAML definition in a code block
+
+Alert history for this rule (mini table of recent alerts generated)
+
+"Edit Rule" button → navigates to /rules/builder?id=ruleId
+
+"Test Rule" button → opens test panel
+
+Interactions:
+
+Toggle switch enables/disables rule (updates local state)
+
+Delete shows confirmation dialog
+
+Duplicate creates a copy with "(Copy)" appended to name
+
+All filters and search work on mock data
+
+"Test Rule" is UI only — shows a panel where you can paste a log and see "Rule would match / would not match"
+
+--- PAGE 6: RULE BUILDER ---
+Route: /rules/builder and /rules/builder?id=:ruleId
+Components: RuleBuilder, RuleConditionEditor, RuleTestPanel, RuleYamlPreview
+
+Layout (split-pane: left form, right YAML preview):
+
+Left side (60% width): Rule Builder Form
+
+Section 1: Basic Info
+
+Rule Name (text input, required)
+
+Description (textarea)
+
+Severity (dropdown: Critical, High, Medium, Low, Info)
+
+Status (dropdown: Enabled, Disabled, Testing)
+
+Author (text input, pre-filled with current user)
+
+Tags (tag input with add/remove)
+
+Section 2: Log Sources
+
+Checkbox group for log source types (at least 1 required)
+
+Section 3: Detection Conditions
+
+Condition builder (each condition is a row):
+
+Field dropdown (populated from unified schema fields)
+
+Operator dropdown (equals, not_equals, contains, etc.)
+
+Value input (text, number, or multi-value based on operator)
+
+Remove condition button (X)
+
+"Add Condition" button
+
+Condition logic input (e.g., "1 AND 2", "1 OR (2 AND 3)")
+
+Validate logic button
+
+Section 4: Threshold (optional, toggleable)
+
+Count (number input)
+
+Time Window (number input + unit dropdown: minutes, hours)
+
+Group By (field dropdown)
+
+Section 5: MITRE ATT&CK Mapping
+
+Tactic dropdown
+
+Technique dropdown (filtered by selected tactic)
+
+Section 6: Actions
+
+"Save Rule" button (primary)
+
+"Test Rule" button (secondary)
+
+"Cancel" button (ghost)
+
+Right side (40% width): Live YAML Preview
+
+Code block showing the auto-generated Sigma-like YAML
+
+Updates in real-time as form fields change
+
+"Copy YAML" button
+
+Syntax highlighted (at minimum, color the YAML keys)
+
+Bottom panel (collapsible): Rule Test Panel
+
+Paste sample log text area
+
+"Run Test" button
+
+Result: "✓ Rule would MATCH this log" (green) or "✗ Rule would NOT match this log" (red)
+
+Show which conditions matched/failed
+
+Interactions:
+
+YAML preview updates live as any form field changes
+
+Form validation on save (name required, at least 1 condition, at least 1 log source)
+
+If editing existing rule (query param id), pre-populate all fields
+
+Test panel runs conditions against pasted log text using local logic
+
+Save adds to rule store (Zustand)
+
+Condition rows are drag-reorderable (nice to have) or at minimum have up/down buttons
+
+--- PAGE 7: MITRE ATT&CK MAP ---
+Route: /mitre
+Components: MitreMatrix, MitreTechniqueCard, MitreCoverageBar
+
+Layout:
+
+Top section:
+
+Coverage summary bar: "X of Y techniques covered (Z%)"
+
+Filter: Show All / Show Covered Only / Show Uncovered Only
+
+Legend: color intensity = alert count, bordered = has detection rule
+
+Main section: ATT&CK Matrix Grid
+
+Horizontal scrollable grid
+
+Each column = one Tactic (13 columns)
+
+Column header: Tactic name (vertical or angled text)
+
+Each cell = one Technique
+
+Cell styling:
+
+Default: dark background, dim text
+
+Covered (has detection rule): blue border, slightly brighter
+
+Has alerts: background intensity scales with alert count (more alerts = more intense cyan/blue)
+
+No coverage: dim/gray
+
+Click a technique cell → opens detail popup/card
+
+Technique Detail Popup (modal or inline expansion):
+
+Technique ID and Name
+
+Tactic it belongs to
+
+Description
+
+Detection rules that cover it (list with links to /rules)
+
+Recent alerts mapped to it (mini list with links to /alerts/:id)
+
+Alert count
+
+"View in MITRE ATT&CK" external link (https://attack.mitre.org/techniques/TXXXX)
+
+Interactions:
+
+Grid is horizontally scrollable for smaller screens
+
+Cells have hover state showing technique name tooltip
+
+Click opens detail
+
+Filter toggles update which cells are visible/highlighted
+
+Clicking rule links navigates to rules page
+
+Clicking alert links navigates to alert detail
+
+--- PAGE 8: LOG INGESTION / PARSER PREVIEW ---
+Route: /ingestion
+Components: LogSourceList, ParserPreview, SampleLogUploader, SchemaViewer, Tabs
+
+Layout:
+
+Tabs: "Log Sources" | "Parser Preview" | "Unified Schema"
+
+Tab 1: Log Sources
+
+Cards for each log source (6 cards in 2x3 or 3x2 grid):
+
+Source name and type icon
+
+Status indicator (green dot = active, red dot = error, gray = inactive)
+
+Events per second
+
+Last event received (relative time)
+
+Parser name
+
+Description
+
+"Configure" button (opens settings modal, UI only)
+
+"View Sample" button (switches to Parser Preview tab with this source selected)
+
+Tab 2: Parser Preview
+
+Split pane:
+
+Left: "Input" section
+
+Dropdown to select log source type
+
+Text area with sample raw log (pre-populated with example for selected type)
+
+"Parse" button
+
+Right: "Output" section
+
+Parsed result displayed as a formatted key-value table
+
+Field names in monospace, values with appropriate formatting
+
+Severity badge for the parsed severity
+
+Tags displayed as badges
+
+"Matches Unified Schema ✓" green indicator
+
+Below the split pane:
+
+"Sample Logs" section: 5 pre-loaded sample logs per source type as clickable examples
+
+Tab 3: Unified Schema Reference
+
+Table showing all fields in the unified schema:
+
+Field Name (monospace)
+
+Type (string, number, boolean, array, object)
+
+Required (yes/no)
+
+Description
+
+Example Value
+
+Search/filter for fields
+
+Interactions:
+
+Selecting a log source type populates the input with a realistic sample
+
+"Parse" button runs the mock parser and shows the output
+
+Clicking sample logs populates the input
+
+Parser output reflects the actual unified schema
+
+Schema table is searchable
+
+--- PAGE 9: SETTINGS / CONFIGURATION ---
+Route: /settings
+Components: GeneralSettings, NotificationSettings, UserProfile, Tabs
+
+Layout:
+
+Tabs: "General" | "Notifications" | "Profile"
+
+Tab 1: General Settings
+
+Theme (Dark/Light toggle — dark is default, light can be a stub)
+
+Time zone (dropdown)
+
+Date format (dropdown: ISO, US, EU)
+
+Default time range (dropdown)
+
+Auto-refresh interval (dropdown: Off, 30s, 1m, 5m)
+
+Log retention display period (dropdown)
+
+Dashboard layout density (Comfortable / Compact)
+
+"Save Changes" button
+
+Tab 2: Notification Settings
+
+Email notifications toggle
+
+Critical alert notification toggle
+
+Daily digest toggle
+
+Notification email address (input)
+
+Severity threshold for notifications (dropdown)
+
+Note: "Notification delivery requires backend integration" info banner
+
+"Save Changes" button
+
+Tab 3: User Profile
+
+Avatar placeholder (circle with initials)
+
+Name (input)
+
+Email (input)
+
+Role (display only)
+
+Team (input)
+
+"Save Changes" button
+
+Interactions:
+
+All settings save to Zustand store / localStorage
+
+Show success toast on save
+
+Changes persist across page navigation (within session)
+
+Form validation (email format, required fields)
+
+==================================================
+SIDEBAR NAVIGATION (MANDATORY)
+
+Sidebar items (top to bottom):
+
+🏠 Dashboard → /
+
+📋 Logs Explorer → /logs
+
+🔔 Alert Queue → /alerts (show count badge for "new" alerts)
+
+🛡️ Detection Rules → /rules
+
+🎯 MITRE ATT&CK → /mitre
+
+📥 Log Ingestion → /ingestion
+---separator---
+
+⚙️ Settings → /settings
+
+Sidebar features:
+
+Active page highlighted with accent background and left border indicator
+
+Collapsible to icon-only mode (64px width)
+
+Collapse toggle button at bottom of sidebar
+
+App logo/name at top: "SecOps Console" with a shield icon
+
+Collapse state persists in Zustand store
+
+==================================================
+TOP BAR (MANDATORY)
+
+Left: Breadcrumb (e.g., "Dashboard" or "Alerts > Alert Detail")
+
+Center: Global search input (searches across alerts, logs, rules — shows categorized dropdown results)
+
+Right side items:
+
+Notification bell icon with unread count badge (clicking shows dropdown with last 5 alerts)
+
+Time range quick selector (affects dashboard data)
+
+User avatar + name dropdown (Profile, Settings, Logout placeholder)
+
+==================================================
+STATE MANAGEMENT STRATEGY
+
+Zustand stores:
+
+useAlertStore:
+
+alerts: Alert[]
+
+selectedAlertIds: string[]
+
+updateAlertStatus(id, newStatus): void
+
+assignAlert(id, analyst): void
+
+addTimelineEvent(alertId, event): void
+
+getAlertById(id): Alert | undefined
+
+getAlertsByStatus(status): Alert[]
+
+getAlertsBySeverity(severity): Alert[]
+
+useLogStore:
+
+logs: UnifiedLog[]
+
+filters: FilterConfig[]
+
+searchQuery: string
+
+sortConfig: SortConfig
+
+pagination: PaginationState
+
+setFilters(filters): void
+
+setSearchQuery(query): void
+
+setSortConfig(config): void
+
+setPage(page): void
+
+getFilteredLogs(): UnifiedLog[]
+
+useRuleStore:
+
+rules: DetectionRule[]
+
+addRule(rule): void
+
+updateRule(id, updates): void
+
+deleteRule(id): void
+
+toggleRuleStatus(id): void
+
+duplicateRule(id): void
+
+getRuleById(id): DetectionRule | undefined
+
+useUIStore:
+
+sidebarCollapsed: boolean
+
+activeDrawer: string | null
+
+activeModal: string | null
+
+toggleSidebar(): void
+
+openDrawer(id): void
+
+closeDrawer(): void
+
+openModal(id): void
+
+closeModal(): void
+
+useFilterStore:
+
+globalTimeRange: TimeRange
+
+setGlobalTimeRange(range): void
+
+==================================================
+SERVICE LAYER PATTERN (MANDATORY)
+
+Every service file must follow this pattern so it can be easily replaced with real API calls:
+
+TypeScript
+
+// services/alertService.ts
+import { mockAlerts } from '../data/mockAlerts';
+import { Alert, AlertStatus } from '../types/alert';
+
+// TODO: Replace with actual API calls
+const API_BASE = '/api'; // Ready for future backend
+
+export const alertService = {
+  async getAlerts(): Promise<Alert[]> {
+    // Simulate API delay
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return mockAlerts;
+  },
+
+  async getAlertById(id: string): Promise<Alert | undefined> {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    return mockAlerts.find(a => a.id === id);
+  },
+
+  async updateAlertStatus(id: string, status: AlertStatus): Promise<Alert> {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const alert = mockAlerts.find(a => a.id === id);
+    if (!alert) throw new Error('Alert not found');
+    alert.status = status;
+    return alert;
+  },
+
+  // ... more methods
+};
+
+This pattern is REQUIRED for ALL service files. Each function must be async and return a Promise, even though it's using local data. This makes future backend integration a simple swap.
+
+==================================================
+INTERACTION STATES (MANDATORY)
+
+Every page and data-driven component MUST handle these states:
+
+Loading: Show skeleton loaders (pulsing gray rectangles matching the content layout) for 300-500ms on initial render using simulated delay
+
+Empty: Show centered empty state with icon, title "No [items] found", and description text. For filtered empty states: "No results match your filters. Try adjusting your search criteria." with a "Clear Filters" button
+
+Error: Show error state with red alert icon, "Something went wrong" title, error description, and "Retry" button (clicking re-renders)
+
+Selected: Row selection highlighted with accent background, details panel populated
+
+Hover: All interactive rows/cards have hover state (subtle background change + cursor pointer)
+
+Active/Focus: Form inputs have visible focus rings, active sidebar items highlighted
+
+Disabled: Buttons that can't be clicked (e.g., "Resolve" when status is already resolved) are visually dimmed and non-interactive
+
+Success feedback: Toast notification appears when status changes, rules saved, comments added (auto-dismiss after 3 seconds, positioned top-right)
+
+==================================================
+ANIMATIONS AND TRANSITIONS
+
+Sidebar collapse/expand: smooth width transition (300ms ease)
+
+Drawer open/close: slide from right with opacity transition (300ms ease)
+
+Modal open/close: fade in with scale-up (200ms ease)
+
+Page transitions: subtle fade (150ms)
+
+Table sort: no layout shift, smooth reorder
+
+Status badge change: brief pulse animation when status updates
+
+Toast notifications: slide in from top-right, auto-dismiss with progress bar
+
+Hover states: transition-colors duration-200
+
+Loading skeletons: pulse animation
+
+Chart animations: Recharts default enter animations
+
+==================================================
+KEYBOARD ACCESSIBILITY
+
+Tab navigation through all interactive elements
+
+Enter/Space to activate buttons and links
+
+Escape to close modals, drawers, and dropdowns
+
+Arrow keys for dropdown navigation
+
+Focus visible outlines on all focusable elements (Tailwind's ring utilities)
+
+==================================================
+CONSTRAINTS
+
+Do NOT use any backend or API server. All data comes from local mock files.
+
+Do NOT use any database.
+
+Do NOT use any authentication system (mock a logged-in user).
+
+Do NOT use Server-Side Rendering. This is a client-side SPA only.
+
+Do NOT use any paid libraries or services.
+
+Do NOT use Material UI, Ant Design, Chakra UI, or any component library. Use only Tailwind CSS with custom components.
+
+Do NOT leave any page as a stub or placeholder. Every page must be fully implemented.
+
+Do NOT use lorem ipsum or generic placeholder text. All text must be realistic cybersecurity content.
+
+Do NOT hardcode styles. Use Tailwind utility classes consistently.
+
+If you absolutely must create any backend scaffolding, it must be Python only (FastAPI or Flask), with at most 5 mock endpoints, in a separate /backend folder, and it must be completely optional — the frontend must work 100% without it.
+
+The app must run with npm install && npm run dev and nothing else.
+
+All mock data IDs must be internally consistent. If an alert references a log ID, that log must exist in mockLogs. If an alert references a rule ID, that rule must exist in mockRules.
+
+Every file mentioned in the folder structure must be created. Do not skip any file.
+
+Every component mentioned in the specification must be created. Do not merge or skip components.
+
+==================================================
+DELIVERABLES
+
+Deliver the complete, working application with:
+
+All files from the folder structure above, fully implemented
+
+Complete package.json with all dependencies and correct scripts
+
+Proper vite.config.ts, tsconfig.json, tailwind.config.ts, postcss.config.js
+
+All 250 mock log entries (generate them, don't tell me to generate them)
+
+All 60 mock alerts with full detail (generate them, don't tell me to generate them)
+
+All 10 detection rules with complete YAML definitions (generate them, don't tell me to generate them)
+
+Full MITRE ATT&CK data for 13 tactics and their techniques
+
+All 9 pages fully functional with all specified interactions
+
+All reusable components built and used consistently
+
+Zustand stores initialized with mock data
+
+Service layer with async mock functions for all data operations
+
+Responsive layout for desktop (≥1280px) and tablet (768-1279px)
+
+Dark theme applied consistently across all components
+
+All charts rendering with sample data
+
+All filter, search, sort, and pagination working on mock data
+
+Working navigation with React Router
+
+Alert workflow (status changes, assignment, comments) fully functional in local state
+
+Rule builder with live YAML preview fully functional
+
+MITRE ATT&CK matrix rendered with coverage visualization
+
+==================================================
+OUTPUT FORMAT
+
+Output the complete application code, file by file, with the full file path as a header before each code block. Do not summarize, abbreviate, or skip any file. If a file is too long, continue it. Do not use "// ... rest of the data" or "// similar entries" shortcuts — generate ALL mock data entries.
+
+Start with package.json, then config files, then types, then mock data, then utilities, then hooks, then stores, then services, then components (common first, then page-specific), then pages, then routing, then App.tsx and main.tsx.
