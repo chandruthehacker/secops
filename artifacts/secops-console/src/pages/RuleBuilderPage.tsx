@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useLocation } from 'wouter';
-import { ArrowLeft, Save, Play, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Save, Play, Plus, Trash2, Code } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { v4 as uuidv4 } from 'uuid';
 import { Severity } from '@/lib/types';
