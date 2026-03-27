@@ -12,10 +12,16 @@ export async function loginHandler(req: Request, res: Response): Promise<void> {
 
   try {
     const result = await authService.login(identifier, password);
-    await logAuditEvent(req, "auth.login", { resource: "auth", metadata: { username: identifier }, success: true });
+    await logAuditEvent(req, "auth.login", {
+      resource: "auth",
+      metadata: { username: result.user.username },
+      success: true,
+      userId: result.user.userId,
+      username: result.user.username,
+    });
     res.json(result);
   } catch (err: any) {
-    await logAuditEvent(req, "auth.login_failed", { resource: "auth", metadata: { username: identifier }, success: false });
+    await logAuditEvent(req, "auth.login_failed", { resource: "auth", metadata: { identifier }, success: false });
     res.status(401).json({ error: err.message ?? "Invalid credentials" });
   }
 }

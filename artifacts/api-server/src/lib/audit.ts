@@ -10,13 +10,15 @@ export async function logAuditEvent(
     resourceId?: string;
     metadata?: Record<string, unknown>;
     success?: boolean;
+    userId?: string | null;
+    username?: string;
   } = {}
 ): Promise<void> {
   const user = (req as any).user as JwtPayload | undefined;
   try {
     await db.insert(auditLogsTable).values({
-      userId: user?.userId ?? null,
-      username: user?.username ?? "anonymous",
+      userId: opts.userId !== undefined ? opts.userId : (user?.userId ?? null),
+      username: opts.username ?? user?.username ?? "anonymous",
       action,
       resource: opts.resource ?? null,
       resourceId: opts.resourceId ?? null,

@@ -41,7 +41,7 @@ router.post("/ingest-log", requireAuth, requireMinRole("soc_l2"), async (req: Re
 router.get("/ingest/pending", requireAuth, requireMinRole("soc_l2"), async (req: Request, res: Response) => {
   const limit = Number(req.query.limit ?? 100);
   const logs = await db.select().from(rawLogsTable)
-    .where(({ processed }: any) => processed.eq("false"))
+    .where(eq(rawLogsTable.processed, "false"))
     .limit(limit);
   res.json({ logs, count: logs.length });
 });

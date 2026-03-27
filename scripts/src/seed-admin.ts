@@ -1,69 +1,50 @@
-import { db, usersTable } from "@workspace/db";
+import pkg from "pg";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
 
-async function seedAdmin() {
-  const existingAdmin = await db.select().from(usersTable).where(eq(usersTable.username, "admin")).limit(1);
-  if (existingAdmin.length > 0) {
-    console.log("Admin user already exists. Skipping.");
-    process.exit(0);
-  }
+const { Pool } = pkg;
 
-  const passwordHash = await bcrypt.hash("Admin@SecOps1!", 12);
-
-  await db.insert(usersTable).values([
-    {
-      username: "admin",
-      email: "admin@secops.local",
-      passwordHash,
-      role: "admin",
-      displayName: "Admin User",
-      status: "active",
-    },
-    {
-      username: "alice",
-      email: "alice@secops.local",
-      passwordHash: await bcrypt.hash("Analyst@1234!", 12),
-      role: "soc_l2",
-      displayName: "Alice Analyst",
-      status: "active",
-    },
-    {
-      username: "bob",
-      email: "bob@secops.local",
-      passwordHash: await bcrypt.hash("Analyst@1234!", 12),
-      role: "soc_l1",
-      displayName: "Bob Chen",
-      status: "active",
-    },
-    {
-      username: "diana",
-      email: "diana@secops.local",
-      passwordHash: await bcrypt.hash("Analyst@1234!", 12),
-      role: "soc_l2",
-      displayName: "Diana Park",
-      status: "active",
-    },
-    {
-      username: "viewer",
-      email: "viewer@secops.local",
-      passwordHash: await bcrypt.hash("Viewer@1234!", 12),
-      role: "viewer",
-      displayName: "Audit Viewer",
-      status: "active",
-    },
-  ]);
-
-  console.log("✅ Seeded users:");
-  console.log("  admin / Admin@SecOps1! (Admin)");
-  console.log("  alice / Analyst@1234! (SOC L2)");
-  console.log("  bob   / Analyst@1234! (SOC L1)");
-  console.log("  diana / Analyst@1234! (SOC L2)");
-  console.log("  viewer / Viewer@1234! (Viewer)");
-  process.exit(0);
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL not set");
 }
 
-seedAdmin().catch((err) => {
-  console.error("Seed failed:", err);
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+async function seed() {
+  const client = await pool.connect();
+  try {
+    const existing = await client.query("SELECT id FROM users WHERE username = $1", ["admin"]);
+    if (existing.rows.length > 0) {
+      console.log("✓ Admin user already exists. Skipping seed.");
+      return;
+    }
+
+    const users = [
+      { username: "admin",  email: "admin@secops.local",  password: "Admin@SecOps1!",  role: "admin",  displayName: "Admin User" },
+      { username: "alice",  email: "alice@secops.local",  password: "Analyst@1234!",   role: "soc_l2", displayName: "Alice Analyst" },
+      { username: "bob",    email: "bob@secops.local",    password: "Analyst@1234!",   role: "soc_l1", displayName: "Bob Chen" },
+      { username: "diana",  email: "diana@secops.local",  password: "Analyst@1234!",   role: "soc_l2", displayName: "Diana Park" },
+      { username: "viewer", email: "viewer@secops.local", password: "Viewer@1234!",    role: "viewer", displayName: "Audit Viewer" },
+    ];
+
+    for (const u of users) {
+      const hash = await bcrypt.hash(u.password, 12);
+      await client.query(
+        `INSERT INTO users (id, username, email, password_hash, role, display_name, status, failed_login_attempts, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active', 0, NOW(), NOW())
+         ON CONFLICT (username) DO NOTHING`,
+        [u.username, u.email, hash, u.role, u.displayName]
+      );
+      console.log(`✓ Seeded: ${u.username} (${u.role}) — password: ${u.password}`);
+    }
+
+    console.log("\nAll users seeded successfully!");
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+seed().catch((err) => {
+  console.error("Seed failed:", err.message);
   process.exit(1);
 });
