@@ -1,0 +1,161 @@
+Upgrade my existing project: "SecOps Console — Mini SIEM with Detection Engine"
+
+Current state:
+- Single-user system (no authentication)
+- No role-based access
+- No user separation
+
+Goal:
+Convert this into a multi-user, role-based SIEM platform similar to Splunk / SOC tools.
+
+Focus ONLY on:
+- User authentication
+- Role-based access control (RBAC)
+- User management system
+- Permissions based on SOC roles
+
+Do NOT change existing detection engine logic unless needed.
+
+---
+
+1) Authentication System (Required)
+
+Implement secure authentication:
+- Login page (email/username + password)
+- Password hashing (bcrypt or equivalent)
+- JWT-based authentication or secure session-based auth
+- Logout functionality
+- Persistent login (optional: refresh tokens)
+
+Optional (bonus but recommended):
+- Password reset flow
+- Basic account lock after multiple failed attempts
+
+---
+
+2) User Roles (SOC-based RBAC)
+
+Implement role-based access control with these roles:
+
+1. Admin (Department Head)
+   - Full access to system
+   - Create / edit / delete users
+   - Assign roles
+   - View all logs, alerts, incidents
+   - Modify detection rules
+   - Access system settings
+
+2. SOC L2 Analyst
+   - Full investigation access
+   - Can view and manage alerts
+   - Can escalate alerts to incidents
+   - Can close incidents
+   - Can add notes and actions
+   - Cannot manage users
+
+3. SOC L1 Analyst
+   - Can view alerts
+   - Can triage alerts (mark: Investigating / False Positive)
+   - Can add notes
+   - Cannot delete alerts
+   - Cannot modify detection rules
+   - Cannot manage users
+
+4. Viewer / Auditor
+   - Read-only access
+   - Can view dashboards, alerts, reports
+   - Cannot modify anything
+
+---
+
+3) User Management System (Admin Only)
+
+Admin dashboard must include:
+- Create new user
+- Assign role (Admin / L2 / L1 / Viewer)
+- Activate / deactivate user
+- Reset password
+- View user activity (basic logs: login time, actions)
+
+---
+
+4) Authorization (Critical)
+
+Enforce permissions strictly:
+- Backend must validate role before every sensitive action
+- Do NOT rely only on frontend restrictions
+- Example:
+  - Only Admin → create users
+  - Only L2/Admin → close incidents
+  - L1 → cannot delete or modify rules
+
+---
+
+5) Multi-User Data Separation
+
+- All actions must be linked to user identity:
+  - alert.createdBy
+  - incident.assignedTo
+  - investigation.notes.author
+
+- Add fields like:
+  - createdBy
+  - assignedTo
+  - lastModifiedBy
+
+---
+
+6) Audit Logging (Very Important for SOC realism)
+
+Log all critical actions:
+- Login / logout
+- Alert status changes
+- Incident creation / closure
+- Rule changes
+- User management actions
+
+Store:
+- userId
+- action
+- timestamp
+- metadata
+
+---
+
+7) UI Changes
+
+Add:
+- Login page (clean UI)
+- Role-based dashboard view
+- Hide unauthorized actions in UI
+- Show user profile (top-right like Splunk)
+
+---
+
+8) Security Best Practices
+
+- Hash passwords securely (bcrypt)
+- Validate all inputs
+- Protect routes using middleware
+- Prevent unauthorized API access
+- Basic rate limiting for login
+
+---
+
+9) Deliverables
+
+- Updated backend with authentication + RBAC
+- Login UI
+- Role-based dashboards
+- Secure API routes
+- Clean folder structure for auth, users, roles
+
+---
+
+Important:
+- Keep system scalable
+- Keep code clean and modular
+- Follow real-world SOC tool behavior (like Splunk, Sentinel)
+
+Do NOT simplify this.
+Build it like a production-ready foundation.
