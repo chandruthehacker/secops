@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import { Alert, DetectionRule, LogEntry } from '../lib/types';
+import { Alert, AlertStatus, DetectionRule, LogEntry } from '../lib/types';
 import { MOCK_ALERTS, MOCK_LOGS, mockRules, mockMitreMatrix } from '../lib/mockGenerator';
+import { v4 as uuidv4 } from 'uuid';
 
 interface AppState {
   logs: LogEntry[];
@@ -8,13 +9,14 @@ interface AppState {
   rules: DetectionRule[];
   mitre: typeof mockMitreMatrix;
   sidebarCollapsed: boolean;
-  
-  // Actions
+
   toggleSidebar: () => void;
-  updateAlertStatus: (id: string, status: Alert['status']) => void;
+  updateAlertStatus: (id: string, status: AlertStatus) => void;
   assignAlert: (id: string, assignee: string) => void;
+  addNoteToAlert: (id: string, note: string) => void;
   toggleRule: (id: string) => void;
   addRule: (rule: DetectionRule) => void;
+  deleteRule: (id: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -25,13 +27,30 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarCollapsed: false,
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  
+
   updateAlertStatus: (id, status) => set((state) => ({
     alerts: state.alerts.map(a => a.id === id ? { ...a, status, updatedAt: new Date() } : a)
   })),
 
   assignAlert: (id, assignee) => set((state) => ({
-    alerts: state.alerts.map(a => a.id === id ? { ...a, assignee, updatedAt: new Date() } : a)
+    alerts: state.alerts.map(a => a.id === id ? { ...a, assignee: assignee || undefined, updatedAt: new Date() } : a)
+  })),
+
+  addNoteToAlert: (id, note) => set((state) => ({
+    alerts: state.alerts.map(a => a.id === id ? {
+      ...a,
+      updatedAt: new Date(),
+      timeline: [
+        ...a.timeline,
+        {
+          id: uuidv4(),
+          timestamp: new Date(),
+          action: 'Analyst Note Added',
+          user: 'Alice (L1)',
+          note,
+        },
+      ]
+    } : a)
   })),
 
   toggleRule: (id) => set((state) => ({
@@ -40,5 +59,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   addRule: (rule) => set((state) => ({
     rules: [rule, ...state.rules]
-  }))
+  })),
+
+  deleteRule: (id) => set((state) => ({
+    rules: state.rules.filter(r => r.id !== id)
+  })),
 }));
