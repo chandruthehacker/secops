@@ -1,0 +1,237 @@
+Upgrade my existing project: "SecOps Console — Mini SIEM with Detection Engine"
+
+Architecture Decision:
+- Node.js backend → API, authentication, RBAC, user management
+- Python engine → detection logic, log parsing, MITRE mapping, AI modules
+
+Development Philosophy:
+- AUTOMATE: authentication, RBAC, database operations, UI rendering
+- CUSTOM BUILD (by me): log parsing, detection rules, MITRE integration, correlation logic, AI features
+
+IMPORTANT:
+Step 1 → Fully complete authentication + RBAC system FIRST  
+Step 2 → Then structure backend cleanly to support integration with detection engine  
+
+Do NOT mix everything together. Build clean modular architecture.
+
+---
+
+PHASE 1: AUTHENTICATION + RBAC (COMPLETE FIRST)
+
+1) Authentication System
+- Login page (email/username + password)
+- Secure password hashing (bcrypt)
+- JWT-based authentication (access + refresh tokens)
+- Logout
+- Token validation middleware
+
+Optional:
+- Password reset
+- Account lock after failed attempts
+
+---
+
+2) Role-Based Access Control (SOC Roles)
+
+Roles:
+
+Admin (Department Head)
+- Full system control
+- Manage users
+- Modify detection rules
+- View everything
+
+SOC L2 Analyst
+- Investigate alerts
+- Create/close incidents
+- Add notes/actions
+- Cannot manage users
+
+SOC L1 Analyst
+- View alerts
+- Triage alerts
+- Add notes
+- Cannot modify rules or delete alerts
+
+Viewer / Auditor
+- Read-only access
+
+---
+
+3) User Management (Admin Only)
+- Create user
+- Assign role
+- Activate/deactivate
+- Reset password
+- View user activity logs
+
+---
+
+4) Authorization (STRICT BACKEND ENFORCEMENT)
+- Every API must check role
+- No frontend-only security
+- Middleware-based role validation
+
+---
+
+5) Multi-user Data Design
+Each record must include:
+- createdBy
+- assignedTo
+- updatedBy
+- timestamps
+
+Apply to:
+- alerts
+- incidents
+- notes
+- rules
+
+---
+
+6) Audit Logging
+Track:
+- login/logout
+- alert updates
+- incident lifecycle
+- rule changes
+- user actions
+
+Store:
+- userId
+- action
+- timestamp
+- metadata
+
+---
+
+7) UI Requirements
+- Login page
+- Role-based dashboard
+- Hide unauthorized actions
+- User profile display
+
+---
+
+PHASE 2: BACKEND ARCHITECTURE (AFTER AUTH)
+
+Build clean modular backend:
+
+Modules:
+- auth/
+- users/
+- roles/
+- alerts/
+- incidents/
+- rules/
+- audit/
+
+Each module:
+- controller
+- service
+- routes
+- validation
+
+---
+
+8) DATABASE (PostgreSQL)
+
+Design schema:
+
+Users:
+- id
+- username
+- email
+- password_hash
+- role
+- status
+- created_at
+
+Alerts:
+- id
+- title
+- severity
+- source
+- status
+- created_by
+- assigned_to
+- raw_log (JSON)
+- created_at
+
+Incidents:
+- id
+- alert_id
+- status
+- assigned_to
+- notes
+- created_at
+
+Audit Logs:
+- id
+- user_id
+- action
+- metadata
+- timestamp
+
+---
+
+PHASE 3: DETECTION ENGINE INTEGRATION (IMPORTANT)
+
+Prepare backend to integrate with Python engine:
+
+- Create API endpoint:
+  POST /ingest-log
+
+- Logs stored in DB (JSON format)
+
+- Detection engine (Python) will:
+  - Read logs
+  - Apply custom detection rules (YAML or custom logic)
+  - Map to MITRE ATT&CK
+  - Return detections
+
+- Backend will:
+  - Convert detections → alerts
+  - Store alerts
+  - Trigger UI updates
+
+DO NOT implement detection logic automatically.
+Leave detection engine hooks clean for custom implementation.
+
+---
+
+PHASE 4: EXTENSIBILITY (FOR FUTURE FEATURES)
+
+Prepare for:
+- MITRE ATT&CK mapping module
+- AI-based anomaly detection
+- Correlation engine
+- SOAR automation
+
+---
+
+9) SECURITY BEST PRACTICES
+- Input validation everywhere
+- Secure password hashing
+- Protected API routes
+- Rate limiting on login
+- No sensitive data exposure
+
+---
+
+10) FINAL DELIVERABLE
+
+- Fully working authentication + RBAC system
+- Multi-user backend
+- PostgreSQL integration
+- Clean modular architecture
+- Ready for detection engine integration
+- Production-style code structure
+
+---
+
+IMPORTANT:
+- Keep code scalable
+- Keep modules clean and separated
+- Do NOT over-simplify
+- Build like a real SOC platform (Splunk-style foundation)

@@ -24,3 +24,9 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+JWT_SECRET = "33d3a0f356548749c3c801c4b5d066d5bba3d5135d67a51c6aae9e6b051002ec2bcc5c988a755600bf25f9bf31037e4e2a794fcee28d640174abe993ca533cfb"
+JWT_REFRESH_SECRET = "d34c9fa7e2bf73901308e4d729ca4adbc94c4a8e69e5dffb5bfe4f097aeff025b115f3e6bfbe4804b3b4f0a04b12ddbe8b76c5016b2c908a192bcaf92e1c2c78"
