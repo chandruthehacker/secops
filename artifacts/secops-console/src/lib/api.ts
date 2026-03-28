@@ -180,6 +180,25 @@ export const logsApi = {
     apiClient.get<{ logs: any[]; total: number; page: number; limit: number }>("/logs", { params }),
 };
 
+// ─── Ingest ──────────────────────────────────────────────────────────────────
+
+export const ingestApi = {
+  single: (data: {
+    source: string;
+    severity?: string;
+    eventType?: string;
+    sourceIp?: string;
+    destIp?: string;
+    hostname?: string;
+    username?: string;
+    message?: string;
+    rawData?: unknown;
+  }) => apiClient.post<{ logId: string }>("/ingest-log", data),
+
+  bulk: (logs: Record<string, unknown>[]) =>
+    apiClient.post<{ inserted: number }>("/ingest/bulk", { logs }),
+};
+
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
 export const dashboardApi = {

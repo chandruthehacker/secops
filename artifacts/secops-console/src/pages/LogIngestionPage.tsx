@@ -1,42 +1,74 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { Database, Server, Wifi, Activity, Plus, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronRight, Eye } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ingestApi, logsApi } from '@/lib/api';
+import {
+  Database, Upload, CheckCircle2, AlertTriangle, XCircle, FileText,
+  Activity, Wifi, Server, Plus, ChevronDown, ChevronRight, Eye, RefreshCw, Loader2
+} from 'lucide-react';
 
-interface Source {
-  id: number;
-  name: string;
-  type: string;
-  status: 'active' | 'warning' | 'error';
-  rate: string;
-  latency: string;
-  format: string;
-  host: string;
-  port: number;
-  schema: Record<string, string>;
+type IngestionStatus = 'idle' | 'parsing' | 'uploading' | 'success' | 'error';
+
+interface ParsedResult {
+  count: number;
+  records: Record<string, unknown>[];
+  errors: string[];
 }
 
-const INITIAL_SOURCES: Source[] = [
-  { id: 1, name: 'AWS CloudTrail', type: 'Cloud', status: 'active', rate: '2.4k', latency: '45ms', format: 'JSON', host: 's3://log-bucket', port: 443, schema: { eventVersion: 'string', eventSource: 'string', eventName: 'string', userIdentity: 'object', requestParameters: 'object', responseElements: 'object', awsRegion: 'string', eventTime: 'timestamp' } },
-  { id: 2, name: 'Palo Alto Firewall', type: 'Network', status: 'active', rate: '14.2k', latency: '12ms', format: 'Syslog (CEF)', host: '10.0.0.1', port: 514, schema: { src_ip: 'ip', dst_ip: 'ip', src_port: 'integer', dst_port: 'integer', proto: 'string', action: 'string', bytes_sent: 'integer', bytes_recv: 'integer' } },
-  { id: 3, name: 'CrowdStrike EDR', type: 'Endpoint', status: 'active', rate: '8.1k', latency: '35ms', format: 'JSON', host: 'api.crowdstrike.com', port: 443, schema: { event_type: 'string', device_id: 'string', process_name: 'string', command_line: 'string', user_name: 'string', event_time: 'timestamp', sha256: 'string' } },
-  { id: 4, name: 'Okta Auth', type: 'Identity', status: 'warning', rate: '1.2k', latency: '450ms', format: 'JSON', host: 'logs.okta.com', port: 443, schema: { actor: 'object', client: 'object', outcome: 'object', eventType: 'string', published: 'timestamp', displayMessage: 'string' } },
-  { id: 5, name: 'Legacy VPN Logs', type: 'Network', status: 'error', rate: '0', latency: '-', format: 'Plain text', host: 'vpn.corp.local', port: 1514, schema: { message: 'string' } },
+function parseSyslogLine(line: string): Record<string, unknown> {
+  const syslogRe = /^(\w{3}\s+\d+\s+[\d:]+)\s+(\S+)\s+(\S+?)(?:\[(\d+)\])?:\s+(.*)$/;
+  const m = line.match(syslogRe);
+  if (m) {
+    return { timestamp: m[1], hostname: m[2], process: m[3], pid: m[4], message: m[5], source: m[2], severity: 'info', rawLine: line };
+  }
+  return { message: line.trim(), source: 'syslog', severity: 'info', rawLine: line };
+}
+
+function detectAndParse(content: string, filename: string): ParsedResult {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  const errors: string[] = [];
+
+  if (ext === 'json' || (!ext && content.trimStart().startsWith('['))) {
+    try {
+      const parsed = JSON.parse(content);
+      const records = Array.isArray(parsed) ? parsed : [parsed];
+      return { count: records.length, records, errors };
+    } catch {
+      const lines = content.split('\n').filter(l => l.trim());
+      const records: Record<string, unknown>[] = [];
+      lines.forEach((line, i) => {
+        try { records.push(JSON.parse(line)); }
+        catch { errors.push(`Line ${i + 1}: invalid JSON — skipped`); }
+      });
+      return { count: records.length, records, errors };
+    }
+  }
+
+  if (ext === 'csv') {
+    const lines = content.split('\n').filter(l => l.trim());
+    if (lines.length < 2) return { count: 0, records: [], errors: ['CSV has no data rows'] };
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+    const records = lines.slice(1).map(line => {
+      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+      return Object.fromEntries(headers.map((h, i) => [h, values[i] ?? '']));
+    });
+    return { count: records.length, records, errors };
+  }
+
+  const lines = content.split('\n').filter(l => l.trim());
+  const records = lines.map(parseSyslogLine);
+  return { count: records.length, records, errors };
+}
+
+const SOURCE_CONFIGS = [
+  { id: 1, name: 'AWS CloudTrail', type: 'Cloud', status: 'active' as const, format: 'JSON', host: 's3://log-bucket' },
+  { id: 2, name: 'Palo Alto Firewall', type: 'Network', status: 'active' as const, format: 'Syslog (CEF)', host: '10.0.0.1' },
+  { id: 3, name: 'CrowdStrike EDR', type: 'Endpoint', status: 'active' as const, format: 'JSON', host: 'api.crowdstrike.com' },
+  { id: 4, name: 'Okta Auth', type: 'Identity', status: 'warning' as const, format: 'JSON', host: 'logs.okta.com' },
+  { id: 5, name: 'Legacy VPN Logs', type: 'Network', status: 'error' as const, format: 'Plain text', host: 'vpn.corp.local' },
 ];
 
-const LIVE_ENTRIES = [
-  '[cloudtrail] 2026-03-27T10:44:01Z PutObject s3://prod-bucket by IAM:alice@corp.com',
-  '[paloalto] 2026-03-27T10:44:02Z DENY TCP 10.0.5.22:49832 -> 45.33.22.11:443 bytes=1024',
-  '[crowdstrike] 2026-03-27T10:44:03Z ProcessCreate powershell.exe -enc SQBFAFgA on DESKTOP-A7X2',
-  '[okta] 2026-03-27T10:44:04Z user.authentication.sso FAILURE alice.smith@corp.com from 185.22.0.1',
-  '[paloalto] 2026-03-27T10:44:05Z ALLOW HTTP 192.168.1.5:52341 -> 8.8.8.8:53 query=malware.io',
-  '[crowdstrike] 2026-03-27T10:44:06Z NetworkConnect lsass.exe -> 10.0.1.50:445 suspicious_src=true',
-  '[cloudtrail] 2026-03-27T10:44:07Z AssumeRole arn:aws:iam::123456789:role/AdminRole success',
-  '[paloalto] 2026-03-27T10:44:08Z DROP UDP 10.1.2.3:1024 -> 8.8.4.4:53 threat_id=9821',
-  '[okta] 2026-03-27T10:44:09Z user.session.start SUCCESS bob.jones@corp.com from 10.100.1.2',
-  '[crowdstrike] 2026-03-27T10:44:10Z FileCreated C:\\Temp\\beacon.exe sha256=3d9f2c4a1b7e8f5a',
-];
-
-const statusIcon = (s: Source['status']) => ({
+const statusIcon = (s: 'active' | 'warning' | 'error') => ({
   active: <><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" /><span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" /></>,
   warning: <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500" />,
   error: <span className="relative inline-flex rounded-full h-3 w-3 bg-destructive" />,
@@ -44,68 +76,110 @@ const statusIcon = (s: Source['status']) => ({
 
 const statusLabel = { active: 'Active', warning: 'Degraded', error: 'Offline' };
 
+const severityColor: Record<string, string> = {
+  critical: 'text-red-400', high: 'text-orange-400', medium: 'text-yellow-400',
+  low: 'text-green-400', info: 'text-blue-400',
+};
+
 export default function LogIngestionPage() {
-  const [sources, setSources] = useState<Source[]>(INITIAL_SOURCES);
+  const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [status, setStatus] = useState<IngestionStatus>('idle');
+  const [parseResult, setParseResult] = useState<ParsedResult | null>(null);
+  const [uploadResult, setUploadResult] = useState<{ inserted: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [schemaViewId, setSchemaViewId] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState('Network');
-  const [liveLog, setLiveLog] = useState<string[]>([]);
-  const [bufferUsage, setBufferUsage] = useState(12);
-  const [indexingRate, setIndexingRate] = useState(25.9);
-  const logRef = useRef<HTMLDivElement>(null);
+  const [sources, setSources] = useState(SOURCE_CONFIGS);
 
-  useEffect(() => {
-    let idx = 0;
-    const interval = setInterval(() => {
-      const entry = LIVE_ENTRIES[idx % LIVE_ENTRIES.length];
-      setLiveLog(prev => [...prev.slice(-40), entry]);
-      setBufferUsage(prev => Math.min(95, prev + (Math.random() * 2 - 0.5)));
-      setIndexingRate(prev => Math.max(20, Math.min(35, prev + (Math.random() * 2 - 1))));
-      idx++;
-    }, 900);
-    return () => clearInterval(interval);
-  }, []);
+  const { data: logsData, dataUpdatedAt } = useQuery({
+    queryKey: ['logs', { limit: 20, page: 1 }],
+    queryFn: () => logsApi.list({ limit: 20, page: 1 }).then(r => r.data),
+    refetchInterval: 5000,
+  });
+
+  const { data: totalData } = useQuery({
+    queryKey: ['logs', { limit: 1, page: 1 }],
+    queryFn: () => logsApi.list({ limit: 1, page: 1 }).then(r => r.data),
+    refetchInterval: 10000,
+  });
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [liveLog]);
+  }, [dataUpdatedAt]);
 
-  const addSource = () => {
-    if (!newName.trim()) return;
-    const newSource: Source = {
-      id: Date.now(),
-      name: newName,
-      type: newType,
-      status: 'warning',
-      rate: '0',
-      latency: '-',
-      format: 'JSON',
-      host: 'pending-config.local',
-      port: 514,
-      schema: { message: 'string', timestamp: 'timestamp' },
+  const uploadMutation = useMutation({
+    mutationFn: (records: Record<string, unknown>[]) => ingestApi.bulk(records),
+    onSuccess: (res) => {
+      setUploadResult({ inserted: res.data.inserted });
+      setStatus('success');
+      queryClient.invalidateQueries({ queryKey: ['logs'] });
+    },
+    onError: (err: any) => {
+      setUploadError(err?.response?.data?.error ?? 'Upload failed');
+      setStatus('error');
+    },
+  });
+
+  const processFile = useCallback((file: File) => {
+    setStatus('parsing');
+    setParseResult(null);
+    setUploadResult(null);
+    setUploadError(null);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      const result = detectAndParse(content, file.name);
+      setParseResult(result);
+      if (result.count === 0) {
+        setStatus('error');
+        setUploadError('No valid records found in file');
+        return;
+      }
+      setStatus('uploading');
+      uploadMutation.mutate(result.records);
     };
-    setSources(prev => [...prev, newSource]);
-    setNewName('');
-    setAddOpen(false);
-  };
+    reader.onerror = () => {
+      setStatus('error');
+      setUploadError('Failed to read file');
+    };
+    reader.readAsText(file);
+  }, [uploadMutation]);
+
+  const handleFiles = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    processFile(files[0]);
+  }, [processFile]);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    handleFiles(e.dataTransfer.files);
+  }, [handleFiles]);
+
+  const totalLogs = totalData?.total ?? 0;
+  const liveEntries = logsData?.logs ?? [];
 
   return (
     <MainLayout>
       <div className="flex flex-col gap-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-3">
-            <Database className="w-8 h-8 text-primary" /> Data Ingestion
+            <Database className="w-8 h-8 text-primary" /> Log Ingestion
           </h1>
-          <p className="text-muted-foreground mt-1">Manage log pipelines, connectors, and data flow health.</p>
+          <p className="text-muted-foreground mt-1">Upload log files, manage pipelines, and monitor data flow in real time.</p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
           {[
+            { label: 'Total Logs Indexed', value: totalLogs.toLocaleString(), color: 'text-primary' },
             { label: 'Active Connectors', value: sources.filter(s => s.status === 'active').length, color: 'text-emerald-400' },
-            { label: 'Total EPS', value: sources.filter(s => s.status === 'active').reduce((a, s) => a + parseFloat(s.rate.replace('k', '')) * 1000, 0).toLocaleString(), color: 'text-primary' },
-            { label: 'Avg Latency', value: '35ms', color: 'text-foreground' },
+            { label: 'Unprocessed Logs', value: (logsData?.logs.filter(l => l.processed === 'false').length ?? 0), color: 'text-amber-400' },
           ].map(s => (
             <div key={s.label} className="bg-card border border-border rounded-xl p-4 shadow-lg">
               <div className="text-xs text-muted-foreground mb-1">{s.label}</div>
@@ -116,11 +190,101 @@ export default function LogIngestionPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
+
+            <div className="bg-card border border-border rounded-xl shadow-lg p-5">
+              <h3 className="font-semibold text-foreground mb-4 flex items-center gap-2">
+                <Upload className="w-4 h-4 text-primary" /> Upload Log File
+              </h3>
+
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={onDrop}
+                onClick={() => status !== 'uploading' && fileRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200
+                  ${dragging ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border hover:border-primary/50 hover:bg-primary/3'}
+                  ${status === 'uploading' || status === 'parsing' ? 'pointer-events-none opacity-70' : ''}`}
+              >
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".json,.csv,.log,.txt,.syslog"
+                  className="hidden"
+                  onChange={(e) => handleFiles(e.target.files)}
+                />
+                {status === 'idle' || status === 'error' || status === 'success' ? (
+                  <>
+                    <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-sm font-medium text-foreground mb-1">Drop a log file here or click to browse</p>
+                    <p className="text-xs text-muted-foreground">Supports JSON, CSV, Syslog (.log, .txt) — up to 10,000 records</p>
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="w-10 h-10 text-primary mx-auto mb-3 animate-spin" />
+                    <p className="text-sm font-medium text-foreground">{status === 'parsing' ? 'Parsing file…' : 'Uploading to database…'}</p>
+                    {parseResult && <p className="text-xs text-muted-foreground mt-1">{parseResult.count.toLocaleString()} records found</p>}
+                  </>
+                )}
+              </div>
+
+              {status === 'success' && uploadResult && (
+                <div className="mt-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4">
+                  <div className="flex items-center gap-2 text-emerald-400 font-semibold mb-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    {uploadResult.inserted.toLocaleString()} log{uploadResult.inserted !== 1 ? 's' : ''} ingested successfully
+                  </div>
+                  {parseResult && parseResult.errors.length > 0 && (
+                    <p className="text-xs text-amber-400">{parseResult.errors.length} line(s) skipped due to parse errors</p>
+                  )}
+                  <button
+                    onClick={() => { setStatus('idle'); setParseResult(null); setUploadResult(null); if (fileRef.current) fileRef.current.value = ''; }}
+                    className="mt-2 text-xs text-primary hover:underline"
+                  >
+                    Upload another file
+                  </button>
+                </div>
+              )}
+
+              {status === 'error' && (
+                <div className="mt-4 bg-destructive/10 border border-destructive/30 rounded-xl p-4">
+                  <div className="flex items-center gap-2 text-destructive font-semibold mb-1">
+                    <XCircle className="w-4 h-4" /> Upload failed
+                  </div>
+                  <p className="text-xs text-muted-foreground">{uploadError}</p>
+                  <button
+                    onClick={() => { setStatus('idle'); setParseResult(null); if (fileRef.current) fileRef.current.value = ''; }}
+                    className="mt-2 text-xs text-primary hover:underline"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-4 pt-4 border-t border-border">
+                <p className="text-xs text-muted-foreground font-medium mb-2">Supported formats</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { fmt: 'JSON', desc: 'Array or NDJSON', icon: '[ ]' },
+                    { fmt: 'CSV', desc: 'With header row', icon: ',' },
+                    { fmt: 'Syslog', desc: 'RFC 3164 / plain text', icon: '>' },
+                  ].map(f => (
+                    <div key={f.fmt} className="bg-secondary/40 border border-border rounded-lg p-3 text-center">
+                      <div className="font-mono text-lg text-primary mb-1">{f.icon}</div>
+                      <div className="text-xs font-semibold text-foreground">{f.fmt}</div>
+                      <div className="text-[10px] text-muted-foreground">{f.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <div className="bg-card border border-border rounded-xl shadow-lg p-5">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-semibold text-foreground">Active Connectors</h3>
-                <button onClick={() => setAddOpen(!addOpen)} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors">
-                  <Plus className="w-4 h-4" /> Add Source
+                <h3 className="font-semibold text-foreground flex items-center gap-2">
+                  <Server className="w-4 h-4 text-primary" /> Configured Connectors
+                </h3>
+                <button onClick={() => setAddOpen(!addOpen)} className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors">
+                  <Plus className="w-4 h-4" /> Add
                 </button>
               </div>
 
@@ -135,7 +299,11 @@ export default function LogIngestionPage() {
                   </div>
                   <div className="flex gap-2 justify-end">
                     <button onClick={() => setAddOpen(false)} className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
-                    <button onClick={addSource} disabled={!newName.trim()} className="px-4 py-1.5 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">Add</button>
+                    <button onClick={() => {
+                      if (!newName.trim()) return;
+                      setSources(prev => [...prev, { id: Date.now(), name: newName, type: newType, status: 'warning', format: 'JSON', host: 'pending-config.local' }]);
+                      setNewName(''); setAddOpen(false);
+                    }} disabled={!newName.trim()} className="px-4 py-1.5 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">Add</button>
                   </div>
                 </div>
               )}
@@ -151,15 +319,7 @@ export default function LogIngestionPage() {
                         <div className="font-semibold text-foreground">{source.name}</div>
                         <div className="text-xs text-muted-foreground">{source.type} · {source.format}</div>
                       </div>
-                      <div className="flex items-center gap-6 flex-shrink-0">
-                        <div className="text-center hidden sm:block">
-                          <div className="text-xs text-muted-foreground mb-0.5">EPS</div>
-                          <div className="font-mono text-sm text-foreground">{source.rate}</div>
-                        </div>
-                        <div className="text-center hidden sm:block">
-                          <div className="text-xs text-muted-foreground mb-0.5">Latency</div>
-                          <div className={`font-mono text-sm ${source.status === 'warning' ? 'text-amber-400' : 'text-foreground'}`}>{source.latency}</div>
-                        </div>
+                      <div className="flex items-center gap-4 flex-shrink-0">
                         <div className="flex items-center gap-2">
                           <span className="relative flex h-3 w-3 flex-shrink-0">{statusIcon(source.status)}</span>
                           <span className="text-sm font-medium text-muted-foreground w-16 hidden sm:block">{statusLabel[source.status]}</span>
@@ -170,42 +330,22 @@ export default function LogIngestionPage() {
 
                     {expandedId === source.id && (
                       <div className="border-t border-border bg-secondary/10 p-4 space-y-3">
-                        <div className="grid grid-cols-3 gap-3 text-sm">
+                        <div className="grid grid-cols-2 gap-3 text-sm">
                           <div><span className="text-muted-foreground text-xs">Host</span><div className="font-mono text-xs text-foreground mt-0.5">{source.host}</div></div>
-                          <div><span className="text-muted-foreground text-xs">Port</span><div className="font-mono text-xs text-foreground mt-0.5">{source.port}</div></div>
                           <div><span className="text-muted-foreground text-xs">Format</span><div className="text-xs text-foreground mt-0.5">{source.format}</div></div>
                         </div>
                         {source.status === 'error' && (
                           <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-xs text-destructive flex items-center gap-2">
                             <XCircle className="w-4 h-4 flex-shrink-0" />
-                            Connection failed: ECONNREFUSED {source.host}:{source.port}. Check network path and firewall rules.
+                            Connection failed: ECONNREFUSED. Check network path and firewall rules.
                           </div>
                         )}
                         {source.status === 'warning' && (
                           <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-xs text-amber-400 flex items-center gap-2">
                             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                            High latency detected ({source.latency}). Parser may be overloaded or network congestion present.
+                            High latency or degraded connection. Parser may be overloaded.
                           </div>
                         )}
-                        <div>
-                          <button
-                            onClick={() => setSchemaViewId(schemaViewId === source.id ? null : source.id)}
-                            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            {schemaViewId === source.id ? 'Hide' : 'View'} Field Schema
-                          </button>
-                          {schemaViewId === source.id && (
-                            <div className="mt-2 bg-[#050810] border border-border rounded-lg p-3 grid grid-cols-2 gap-x-4 gap-y-1">
-                              {Object.entries(source.schema).map(([field, type]) => (
-                                <div key={field} className="flex items-center justify-between text-xs py-0.5 border-b border-border/30">
-                                  <span className="font-mono text-green-400">{field}</span>
-                                  <span className="text-muted-foreground italic">{type}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
                       </div>
                     )}
                   </div>
@@ -218,35 +358,24 @@ export default function LogIngestionPage() {
             <div className="bg-card border border-border rounded-xl shadow-lg p-5">
               <div className="flex items-center gap-2 mb-4">
                 <Activity className="w-4 h-4 text-primary" />
-                <h3 className="font-semibold text-foreground">Pipeline Health</h3>
+                <h3 className="font-semibold text-foreground">Ingestion Stats</h3>
               </div>
-              <div className="space-y-5">
-                <div>
-                  <div className="flex justify-between text-xs mb-2">
-                    <span className="text-muted-foreground">Kafka Buffer Usage</span>
-                    <span className={`font-mono font-medium ${bufferUsage > 70 ? 'text-amber-400' : 'text-emerald-400'}`}>{bufferUsage.toFixed(0)}%</span>
-                  </div>
-                  <div className="w-full bg-secondary rounded-full h-2">
-                    <div className={`h-2 rounded-full transition-all duration-700 ${bufferUsage > 70 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${bufferUsage}%` }} />
-                  </div>
+              <div className="space-y-4 text-sm">
+                <div className="flex justify-between items-center py-2 border-b border-border/50">
+                  <span className="text-muted-foreground">Total Indexed</span>
+                  <span className="font-mono font-semibold text-primary">{totalLogs.toLocaleString()}</span>
                 </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-2">
-                    <span className="text-muted-foreground">Indexing Rate</span>
-                    <span className="text-primary font-mono font-medium">{indexingRate.toFixed(1)}k/s</span>
-                  </div>
-                  <div className="w-full bg-secondary rounded-full h-2">
-                    <div className="bg-primary h-2 rounded-full transition-all duration-700" style={{ width: `${(indexingRate / 40) * 100}%` }} />
-                  </div>
+                <div className="flex justify-between items-center py-2 border-b border-border/50">
+                  <span className="text-muted-foreground">Active Connectors</span>
+                  <span className="font-mono font-semibold text-emerald-400">{sources.filter(s => s.status === 'active').length}</span>
                 </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-2">
-                    <span className="text-muted-foreground">Parser Drop Rate</span>
-                    <span className="text-amber-500 font-mono font-medium">0.4%</span>
-                  </div>
-                  <div className="w-full bg-secondary rounded-full h-2">
-                    <div className="bg-amber-500 h-2 rounded-full" style={{ width: '4%' }} />
-                  </div>
+                <div className="flex justify-between items-center py-2 border-b border-border/50">
+                  <span className="text-muted-foreground">Degraded</span>
+                  <span className="font-mono font-semibold text-amber-400">{sources.filter(s => s.status === 'warning').length}</span>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-muted-foreground">Offline</span>
+                  <span className="font-mono font-semibold text-destructive">{sources.filter(s => s.status === 'error').length}</span>
                 </div>
               </div>
             </div>
@@ -256,16 +385,44 @@ export default function LogIngestionPage() {
                 <Wifi className="w-4 h-4 text-primary" />
                 <h3 className="font-semibold text-primary text-sm">Live Event Stream</h3>
                 <span className="ml-auto flex items-center gap-1 text-xs text-emerald-400">
-                  <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" /></span>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+                  </span>
                   LIVE
                 </span>
               </div>
-              <div ref={logRef} className="bg-[#050810] p-3 rounded-lg border border-border h-64 overflow-y-auto">
-                <div className="space-y-1 font-mono text-[11px] text-muted-foreground">
-                  {liveLog.map((entry, i) => (
-                    <div key={i} className={`leading-relaxed ${i === liveLog.length - 1 ? 'text-green-400' : ''}`}>{entry}</div>
-                  ))}
-                </div>
+              <div ref={logRef} className="bg-[#050810] p-3 rounded-lg border border-border h-72 overflow-y-auto">
+                {liveEntries.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center gap-2">
+                    <FileText className="w-8 h-8 text-muted-foreground/40" />
+                    <p className="text-xs text-muted-foreground text-center">No logs yet. Upload a file or ingest logs to see them here.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1 font-mono text-[11px]">
+                    {liveEntries.map((entry: any, i: number) => {
+                      const ts = entry.createdAt ? new Date(entry.createdAt).toISOString().replace('T', ' ').slice(0, 19) : '';
+                      const sev = entry.severity ?? 'info';
+                      return (
+                        <div key={entry.id ?? i} className={`leading-relaxed ${i === liveEntries.length - 1 ? 'text-green-400' : 'text-muted-foreground'}`}>
+                          <span className="text-muted-foreground/50">{ts} </span>
+                          <span className={`font-semibold ${severityColor[sev] ?? 'text-blue-400'}`}>[{sev.toUpperCase()}] </span>
+                          <span className="text-primary/80">[{entry.source}] </span>
+                          {entry.message}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-[10px] text-muted-foreground">Auto-refreshes every 5s</p>
+                <button
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ['logs'] })}
+                  className="text-[10px] text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" /> Refresh now
+                </button>
               </div>
             </div>
           </div>

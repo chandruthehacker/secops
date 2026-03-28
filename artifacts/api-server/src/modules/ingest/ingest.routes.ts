@@ -78,6 +78,42 @@ router.post("/ingest/detections", requireAuth, can("ingest:write"), async (req: 
   res.status(201).json({ created: created.length, alerts: created });
 });
 
+router.post("/ingest/bulk", requireAuth, can("ingest:write"), async (req: Request, res: Response) => {
+  const { logs } = req.body;
+  if (!Array.isArray(logs) || logs.length === 0) {
+    res.status(400).json({ error: "logs must be a non-empty array" });
+    return;
+  }
+  if (logs.length > 10_000) {
+    res.status(400).json({ error: "Maximum 10,000 logs per bulk upload" });
+    return;
+  }
+
+  const values = logs.map((l: Record<string, any>) => ({
+    source: String(l.source ?? l.host ?? l.hostname ?? "file-upload"),
+    severity: ["critical", "high", "medium", "low", "info"].includes(String(l.severity ?? "").toLowerCase())
+      ? String(l.severity).toLowerCase()
+      : "info",
+    eventType: l.eventType ?? l.event_type ?? l.EventType ?? undefined,
+    sourceIp: l.sourceIp ?? l.source_ip ?? l.src_ip ?? l.src ?? undefined,
+    destIp: l.destIp ?? l.dest_ip ?? l.dst_ip ?? l.dst ?? undefined,
+    hostname: l.hostname ?? l.host ?? undefined,
+    username: l.username ?? l.user ?? undefined,
+    message: l.message ?? l.msg ?? l.Message ?? JSON.stringify(l),
+    rawData: l as any,
+    processed: "false" as const,
+  }));
+
+  const inserted = await db.insert(rawLogsTable).values(values).returning({ id: rawLogsTable.id });
+  await logAuditEvent(req, "ingest.bulk", {
+    resource: "ingest",
+    resourceId: inserted[0]?.id,
+    metadata: { count: inserted.length },
+  });
+
+  res.status(201).json({ inserted: inserted.length });
+});
+
 router.get("/logs", requireAuth, can("alerts:view"), async (req: Request, res: Response) => {
   const { source, severity, search, page = "1", limit = "50" } = req.query as Record<string, string>;
   const pageNum = Math.max(1, Number(page));

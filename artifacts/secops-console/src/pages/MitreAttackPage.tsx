@@ -85,34 +85,35 @@ export default function MitreAttackPage() {
     queryFn: () => rulesApi.list().then(r => r.data.rules.map(normalizeRule)),
   });
 
-  // Compute dynamic coverage from real data, fall back to static matrix
+  // Compute coverage and alert counts entirely from real backend data
   const mitre = useMemo((): MitreTactic[] => {
-    // Build sets of MITRE IDs from real data
     const coveredByRules = new Set<string>();
     const alertsByMitre: Record<string, number> = {};
 
     (rulesData ?? []).forEach(r => {
-      r.mitreIds.forEach(id => coveredByRules.add(id.split('.')[0]));
+      r.mitreIds.forEach((id: string) => {
+        coveredByRules.add(id.toUpperCase());
+        coveredByRules.add(id.split('.')[0].toUpperCase());
+      });
     });
 
     (alertsData ?? []).forEach((a: any) => {
       (a.mitreIds ?? []).forEach((id: string) => {
-        const baseId = id.split('.')[0];
+        const baseId = id.split('.')[0].toUpperCase();
         alertsByMitre[baseId] = (alertsByMitre[baseId] ?? 0) + 1;
+        alertsByMitre[id.toUpperCase()] = (alertsByMitre[id.toUpperCase()] ?? 0) + 1;
       });
     });
-
-    const hasRealData = coveredByRules.size > 0 || Object.keys(alertsByMitre).length > 0;
 
     return mockMitreMatrix.map(tactic => ({
       ...tactic,
       techniques: tactic.techniques.map(tech => {
-        if (!hasRealData) return tech;
-        const baseId = tech.id.split('.')[0];
+        const techId = tech.id.toUpperCase();
+        const baseId = techId.split('.')[0];
         return {
           ...tech,
-          covered: coveredByRules.has(baseId) || tech.covered,
-          alertCount: alertsByMitre[baseId] ?? tech.alertCount,
+          covered: coveredByRules.has(techId) || coveredByRules.has(baseId),
+          alertCount: alertsByMitre[techId] ?? alertsByMitre[baseId] ?? 0,
         };
       }),
     }));

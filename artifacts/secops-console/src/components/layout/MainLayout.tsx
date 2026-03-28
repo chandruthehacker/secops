@@ -2,6 +2,8 @@ import React from 'react';
 import { Link, useLocation } from 'wouter';
 import { useAppStore } from '@/store';
 import { useAuthStore } from '@/store/authStore';
+import { useQuery } from '@tanstack/react-query';
+import { alertsApi } from '@/lib/api';
 import { 
   LayoutDashboard, Terminal, AlertTriangle, Shield, 
   Target, Database, Settings, Menu, Bell, Users, ClipboardList,
@@ -43,10 +45,15 @@ export const ROLE_COLORS: Record<string, string> = {
 
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const { sidebarCollapsed, toggleSidebar, alerts } = useAppStore();
-  const { user, logout, can } = useAuthStore();
-  
-  const newAlertsCount = alerts.filter(a => a.status === 'new').length;
+  const { sidebarCollapsed, toggleSidebar } = useAppStore();
+  const { user, logout, can, isAuthenticated } = useAuthStore();
+
+  const { data: newAlertsCount = 0 } = useQuery({
+    queryKey: ['alerts-count', 'new'],
+    queryFn: () => alertsApi.list({ status: 'new', limit: 1, page: 1 }).then(r => r.data.total),
+    refetchInterval: 30_000,
+    enabled: isAuthenticated,
+  });
 
   const displayName = user?.displayName ?? user?.username ?? 'User';
   const initials = displayName.split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase();
