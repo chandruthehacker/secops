@@ -86,7 +86,7 @@ export interface AuthUser {
   userId: string;
   username: string;
   email: string;
-  role: "admin" | "soc_l2" | "soc_l1" | "viewer";
+  role: "admin" | "soc_manager" | "detection_engineer" | "soc_l2" | "soc_l1" | "viewer";
   displayName?: string | null;
 }
 

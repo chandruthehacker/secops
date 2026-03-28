@@ -2,6 +2,65 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { authApi, type AuthUser } from "../lib/api";
 
+export type Permission =
+  | "alerts:view"
+  | "alerts:triage"
+  | "alerts:assign"
+  | "alerts:close"
+  | "alerts:note"
+  | "rules:view"
+  | "rules:toggle"
+  | "rules:write"
+  | "rules:delete"
+  | "rules:test"
+  | "ingest:write"
+  | "ingest:pending"
+  | "users:manage"
+  | "audit:view"
+  | "reports:view";
+
+type UserRole = AuthUser["role"];
+
+const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
+  admin: [
+    "alerts:view", "alerts:triage", "alerts:assign", "alerts:close", "alerts:note",
+    "rules:view", "rules:toggle", "rules:write", "rules:delete", "rules:test",
+    "ingest:write", "ingest:pending",
+    "users:manage",
+    "audit:view",
+    "reports:view",
+  ],
+  soc_manager: [
+    "alerts:view", "alerts:triage", "alerts:assign", "alerts:close", "alerts:note",
+    "rules:view",
+    "ingest:write", "ingest:pending",
+    "audit:view",
+    "reports:view",
+  ],
+  detection_engineer: [
+    "alerts:view", "alerts:note",
+    "rules:view", "rules:toggle", "rules:write", "rules:delete", "rules:test",
+    "ingest:write", "ingest:pending",
+    "reports:view",
+  ],
+  soc_l2: [
+    "alerts:view", "alerts:triage", "alerts:assign", "alerts:close", "alerts:note",
+    "rules:view", "rules:toggle", "rules:write", "rules:test",
+    "ingest:write", "ingest:pending",
+    "reports:view",
+  ],
+  soc_l1: [
+    "alerts:view", "alerts:triage", "alerts:note",
+    "rules:view",
+    "reports:view",
+  ],
+  viewer: [
+    "alerts:view",
+    "rules:view",
+    "reports:view",
+  ],
+};
+
 interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
@@ -9,16 +68,9 @@ interface AuthState {
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
-  hasRole: (...roles: AuthUser["role"][]) => boolean;
-  hasMinRole: (minRole: AuthUser["role"]) => boolean;
+  hasRole: (...roles: UserRole[]) => boolean;
+  can: (permission: Permission) => boolean;
 }
-
-const ROLE_LEVEL: Record<AuthUser["role"], number> = {
-  admin: 4,
-  soc_l2: 3,
-  soc_l1: 2,
-  viewer: 1,
-};
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -67,10 +119,10 @@ export const useAuthStore = create<AuthState>()(
         return !!user && roles.includes(user.role);
       },
 
-      hasMinRole: (minRole) => {
+      can: (permission) => {
         const user = get().user;
         if (!user) return false;
-        return ROLE_LEVEL[user.role] >= ROLE_LEVEL[minRole];
+        return (ROLE_PERMISSIONS[user.role] ?? []).includes(permission);
       },
     }),
     {

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAppStore } from '@/store';
+import { useAuthStore } from '@/store/authStore';
 import { format } from 'date-fns';
 import { SeverityBadge } from '@/components/ui/Badge';
-import { Shield, Plus, Search, Power, PowerOff, Code, Trash2, X, Copy, CheckCheck } from 'lucide-react';
+import { Shield, Plus, Search, Power, PowerOff, Code, Trash2, X, Copy, CheckCheck, Lock } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { DetectionRule } from '@/lib/types';
 
@@ -47,11 +48,16 @@ function YamlModal({ rule, onClose }: { rule: DetectionRule; onClose: () => void
 
 export default function DetectionRulesPage() {
   const { rules, toggleRule, deleteRule } = useAppStore();
+  const { can } = useAuthStore();
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState('');
   const [viewYamlFor, setViewYamlFor] = useState<DetectionRule | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
+
+  const canWrite  = can('rules:write');
+  const canDelete = can('rules:delete');
+  const canToggle = can('rules:toggle');
 
   const filteredRules = rules.filter(r => {
     const matchSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.mitreIds.some(id => id.includes(searchTerm));
@@ -69,7 +75,7 @@ export default function DetectionRulesPage() {
       {viewYamlFor && <YamlModal rule={viewYamlFor} onClose={() => setViewYamlFor(null)} />}
 
       {/* Delete confirm dialog */}
-      {confirmDeleteId && (() => {
+      {confirmDeleteId && canDelete && (() => {
         const rule = rules.find(r => r.id === confirmDeleteId);
         return rule ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDeleteId(null)}>
@@ -94,12 +100,18 @@ export default function DetectionRulesPage() {
             </h1>
             <p className="text-muted-foreground mt-1">Manage SIEM correlation rules and behavioral analytics.</p>
           </div>
-          <button
-            onClick={() => setLocation('/rules/new')}
-            className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground font-semibold rounded-xl hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/25 transition-all"
-          >
-            <Plus className="w-4 h-4" /> Create Rule
-          </button>
+          {canWrite ? (
+            <button
+              onClick={() => setLocation('/rules/new')}
+              className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground font-semibold rounded-xl hover:bg-primary/90 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/25 transition-all"
+            >
+              <Plus className="w-4 h-4" /> Create Rule
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-secondary border border-border rounded-xl text-muted-foreground text-sm cursor-default">
+              <Lock className="w-4 h-4 opacity-50" /> View Only
+            </div>
+          )}
         </div>
 
         {/* Stats */}
@@ -159,13 +171,22 @@ export default function DetectionRulesPage() {
                 {filteredRules.map(rule => (
                   <tr key={rule.id} className={`transition-colors group ${rule.enabled ? 'hover:bg-secondary/50' : 'opacity-55 bg-secondary/10 hover:bg-secondary/30'}`}>
                     <td className="px-5 py-4">
-                      <button
-                        onClick={() => toggleRule(rule.id)}
-                        className={`p-1.5 rounded-full transition-all ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 hover:scale-110' : 'text-muted-foreground bg-secondary hover:bg-secondary/80'}`}
-                        title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
-                      >
-                        {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
-                      </button>
+                      {canToggle ? (
+                        <button
+                          onClick={() => toggleRule(rule.id)}
+                          className={`p-1.5 rounded-full transition-all ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 hover:scale-110' : 'text-muted-foreground bg-secondary hover:bg-secondary/80'}`}
+                          title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
+                        >
+                          {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                        </button>
+                      ) : (
+                        <span
+                          className={`inline-flex p-1.5 rounded-full ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10' : 'text-muted-foreground bg-secondary'}`}
+                          title={rule.enabled ? 'Enabled' : 'Disabled'}
+                        >
+                          {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-4">
                       <div className="font-medium text-foreground mb-0.5">{rule.name}</div>
@@ -191,13 +212,15 @@ export default function DetectionRulesPage() {
                         >
                           <Code className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => setConfirmDeleteId(rule.id)}
-                          className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                          title="Delete Rule"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {canDelete && (
+                          <button
+                            onClick={() => setConfirmDeleteId(rule.id)}
+                            className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
+                            title="Delete Rule"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

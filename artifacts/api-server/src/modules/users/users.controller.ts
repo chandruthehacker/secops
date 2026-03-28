@@ -20,7 +20,7 @@ export async function createUser(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: "username, email, password, and role are required" });
     return;
   }
-  const validRoles: UserRole[] = ["admin", "soc_l2", "soc_l1", "viewer"];
+  const validRoles: UserRole[] = ["admin", "soc_manager", "detection_engineer", "soc_l2", "soc_l1", "viewer"];
   if (!validRoles.includes(role)) {
     res.status(400).json({ error: "Invalid role" });
     return;

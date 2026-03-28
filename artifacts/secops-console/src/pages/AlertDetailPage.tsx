@@ -1,21 +1,28 @@
 import React, { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAppStore } from '@/store';
+import { useAuthStore } from '@/store/authStore';
 import { format } from 'date-fns';
 import { SeverityBadge, StatusBadge } from '@/components/ui/Badge';
 import { useRoute, Link } from 'wouter';
-import { ArrowLeft, Bot, Target, Clock, CheckCircle2, XCircle, AlertTriangle, UserPlus, TrendingUp, MessageSquare, Shield, Terminal } from 'lucide-react';
+import { ArrowLeft, Bot, Target, Clock, CheckCircle2, XCircle, AlertTriangle, UserPlus, TrendingUp, MessageSquare, Shield, Terminal, Lock } from 'lucide-react';
 import { AlertStatus } from '@/lib/types';
 
-const ANALYSTS = ['Alice (L1)', 'Bob (L2)', 'Charlie (L3)', 'Diana (L1)', 'Eve (L2)'];
+const ANALYSTS = ['Alice (L2)', 'Bob (L1)', 'Diana (L2)', 'Morgan (Mgr)', 'Admin'];
 
 export default function AlertDetailPage() {
   const [, params] = useRoute('/alerts/:id');
   const { alerts, updateAlertStatus, assignAlert, addNoteToAlert } = useAppStore();
+  const { can } = useAuthStore();
   const alert = alerts.find(a => a.id === params?.id);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const canTriage  = can('alerts:triage');
+  const canClose   = can('alerts:close');
+  const canAssign  = can('alerts:assign');
+  const canNote    = can('alerts:note');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -84,30 +91,36 @@ export default function AlertDetailPage() {
               </p>
             </div>
             <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => handleStatus('investigating')}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'investigating' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : 'bg-secondary border-border text-muted-foreground hover:border-amber-500/30 hover:text-amber-400'}`}
-              >
-                <AlertTriangle className="w-4 h-4" /> Investigate
-              </button>
-              <button
-                onClick={() => handleStatus('false_positive')}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'false_positive' ? 'bg-secondary border-border text-foreground' : 'bg-secondary border-border text-muted-foreground hover:text-foreground'}`}
-              >
-                <XCircle className="w-4 h-4" /> False Positive
-              </button>
-              <button
-                onClick={() => handleStatus('resolved')}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'resolved' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-secondary border-border text-muted-foreground hover:border-emerald-500/30 hover:text-emerald-400'}`}
-              >
-                <CheckCircle2 className="w-4 h-4" /> Resolve
-              </button>
-              <button
-                onClick={() => { handleStatus('investigating'); showToast('Escalated to L3 Threat Hunter'); }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-destructive/10 border border-destructive/30 text-destructive rounded-lg text-sm font-medium hover:bg-destructive/20 transition-all"
-              >
-                <TrendingUp className="w-4 h-4" /> Escalate
-              </button>
+              {canTriage && (
+                <button
+                  onClick={() => handleStatus('investigating')}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'investigating' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : 'bg-secondary border-border text-muted-foreground hover:border-amber-500/30 hover:text-amber-400'}`}
+                >
+                  <AlertTriangle className="w-4 h-4" /> Investigate
+                </button>
+              )}
+              {canClose && (
+                <>
+                  <button
+                    onClick={() => handleStatus('false_positive')}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'false_positive' ? 'bg-secondary border-border text-foreground' : 'bg-secondary border-border text-muted-foreground hover:text-foreground'}`}
+                  >
+                    <XCircle className="w-4 h-4" /> False Positive
+                  </button>
+                  <button
+                    onClick={() => handleStatus('resolved')}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${alert.status === 'resolved' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-secondary border-border text-muted-foreground hover:border-emerald-500/30 hover:text-emerald-400'}`}
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Resolve
+                  </button>
+                  <button
+                    onClick={() => { handleStatus('investigating'); showToast('Escalated to L3 Threat Hunter'); }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-destructive/10 border border-destructive/30 text-destructive rounded-lg text-sm font-medium hover:bg-destructive/20 transition-all"
+                  >
+                    <TrendingUp className="w-4 h-4" /> Escalate
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -183,23 +196,32 @@ export default function AlertDetailPage() {
               <h3 className="text-base font-semibold text-foreground mb-4 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4 text-primary" /> Add Investigation Note
               </h3>
-              <textarea
-                value={note}
-                onChange={e => setNote(e.target.value)}
-                placeholder="Describe findings, actions taken, IOCs discovered, remediation steps..."
-                className="w-full bg-input border border-border rounded-lg p-3 text-sm text-foreground focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all h-24 resize-none"
-                maxLength={500}
-              />
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-xs text-muted-foreground">{note.length}/500</span>
-                <button
-                  onClick={handleAddNote}
-                  disabled={!note.trim() || submitting}
-                  className="px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {submitting ? 'Adding…' : 'Add Note'}
-                </button>
-              </div>
+              {canNote ? (
+                <>
+                  <textarea
+                    value={note}
+                    onChange={e => setNote(e.target.value)}
+                    placeholder="Describe findings, actions taken, IOCs discovered, remediation steps..."
+                    className="w-full bg-input border border-border rounded-lg p-3 text-sm text-foreground focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all h-24 resize-none"
+                    maxLength={500}
+                  />
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xs text-muted-foreground">{note.length}/500</span>
+                    <button
+                      onClick={handleAddNote}
+                      disabled={!note.trim() || submitting}
+                      className="px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {submitting ? 'Adding…' : 'Add Note'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+                  <Lock className="w-4 h-4 opacity-50" />
+                  <span>Your role does not permit adding notes to alerts.</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -230,26 +252,45 @@ export default function AlertDetailPage() {
               <h3 className="font-semibold text-foreground mb-4 text-sm uppercase tracking-wider flex items-center gap-2">
                 <UserPlus className="w-3.5 h-3.5 text-primary" /> Assignment
               </h3>
-              <div className="space-y-1.5">
-                {ANALYSTS.map(analyst => (
-                  <button
-                    key={analyst}
-                    onClick={() => handleAssign(analyst)}
-                    className={`w-full flex items-center gap-2.5 p-2 rounded-lg border transition-all text-sm ${alert.assignee === analyst ? 'bg-primary/10 border-primary/30 text-primary' : 'border-transparent hover:bg-secondary text-muted-foreground hover:text-foreground'}`}
-                  >
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${alert.assignee === analyst ? 'bg-primary text-white' : 'bg-secondary border border-border text-muted-foreground'}`}>
-                      {analyst.charAt(0)}
+              {canAssign ? (
+                <div className="space-y-1.5">
+                  {ANALYSTS.map(analyst => (
+                    <button
+                      key={analyst}
+                      onClick={() => handleAssign(analyst)}
+                      className={`w-full flex items-center gap-2.5 p-2 rounded-lg border transition-all text-sm ${alert.assignee === analyst ? 'bg-primary/10 border-primary/30 text-primary' : 'border-transparent hover:bg-secondary text-muted-foreground hover:text-foreground'}`}
+                    >
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${alert.assignee === analyst ? 'bg-primary text-white' : 'bg-secondary border border-border text-muted-foreground'}`}>
+                        {analyst.charAt(0)}
+                      </div>
+                      <span className="flex-1 text-left">{analyst}</span>
+                      {alert.assignee === analyst && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
+                    </button>
+                  ))}
+                  {alert.assignee && (
+                    <button onClick={() => { assignAlert(alert.id, ''); showToast('Assignment cleared'); }} className="text-xs text-muted-foreground hover:text-destructive mt-1 transition-colors">
+                      Clear assignment
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {alert.assignee ? (
+                    <div className="flex items-center gap-2.5 p-2 rounded-lg bg-primary/10 border border-primary/30">
+                      <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
+                        {alert.assignee.charAt(0)}
+                      </div>
+                      <span className="text-sm text-primary">{alert.assignee}</span>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-auto" />
                     </div>
-                    <span className="flex-1 text-left">{analyst}</span>
-                    {alert.assignee === analyst && <CheckCircle2 className="w-3.5 h-3.5 text-primary" />}
-                  </button>
-                ))}
-                {alert.assignee && (
-                  <button onClick={() => { assignAlert(alert.id, ''); showToast('Assignment cleared'); }} className="text-xs text-muted-foreground hover:text-destructive mt-1 transition-colors">
-                    Clear assignment
-                  </button>
-                )}
-              </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">Unassigned</p>
+                  )}
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 mt-1">
+                    <Lock className="w-3 h-3" /> SOC L2 or higher can assign
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Timeline */}

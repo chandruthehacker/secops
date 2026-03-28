@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
+import type { Permission } from "@/store/authStore";
 
 // Pages
 import DashboardPage from "@/pages/DashboardPage";
@@ -22,8 +23,8 @@ import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
-function ProtectedRoute({ component: Component, minRole }: { component: React.ComponentType; minRole?: string }) {
-  const { isAuthenticated, hasMinRole } = useAuthStore();
+function ProtectedRoute({ component: Component, permission }: { component: React.ComponentType; permission?: Permission }) {
+  const { isAuthenticated, can } = useAuthStore();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -33,10 +34,11 @@ function ProtectedRoute({ component: Component, minRole }: { component: React.Co
   }, [isAuthenticated, setLocation]);
 
   if (!isAuthenticated) return null;
-  if (minRole && !hasMinRole(minRole as any)) {
+  if (permission && !can(permission)) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        <p>You don't have permission to view this page.</p>
+      <div className="flex items-center justify-center h-64 text-muted-foreground flex-col gap-2">
+        <p className="font-medium">Access Denied</p>
+        <p className="text-sm">Your role does not have permission to view this page.</p>
       </div>
     );
   }
@@ -58,12 +60,12 @@ function Router() {
       <Route path="/alerts" component={() => <ProtectedRoute component={AlertQueuePage} />} />
       <Route path="/alerts/:id" component={() => <ProtectedRoute component={AlertDetailPage} />} />
       <Route path="/rules" component={() => <ProtectedRoute component={DetectionRulesPage} />} />
-      <Route path="/rules/new" component={() => <ProtectedRoute component={RuleBuilderPage} minRole="soc_l2" />} />
+      <Route path="/rules/new" component={() => <ProtectedRoute component={RuleBuilderPage} permission="rules:write" />} />
       <Route path="/mitre" component={() => <ProtectedRoute component={MitreAttackPage} />} />
-      <Route path="/ingestion" component={() => <ProtectedRoute component={LogIngestionPage} minRole="soc_l2" />} />
+      <Route path="/ingestion" component={() => <ProtectedRoute component={LogIngestionPage} permission="ingest:write" />} />
       <Route path="/settings" component={() => <ProtectedRoute component={SettingsPage} />} />
-      <Route path="/users" component={() => <ProtectedRoute component={UserManagementPage} minRole="admin" />} />
-      <Route path="/audit" component={() => <ProtectedRoute component={AuditLogPage} minRole="admin" />} />
+      <Route path="/users" component={() => <ProtectedRoute component={UserManagementPage} permission="users:manage" />} />
+      <Route path="/audit" component={() => <ProtectedRoute component={AuditLogPage} permission="audit:view" />} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -6,6 +6,8 @@ import { useToast } from "@/hooks/use-toast";
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-red-500/15 text-red-400 border-red-500/30",
+  soc_manager: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+  detection_engineer: "bg-amber-500/15 text-amber-400 border-amber-500/30",
   soc_l2: "bg-blue-500/15 text-blue-400 border-blue-500/30",
   soc_l1: "bg-green-500/15 text-green-400 border-green-500/30",
   viewer: "bg-muted text-muted-foreground border-border",
@@ -13,10 +15,21 @@ const ROLE_COLORS: Record<string, string> = {
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
+  soc_manager: "SOC Manager",
+  detection_engineer: "Det. Engineer",
   soc_l2: "SOC L2",
   soc_l1: "SOC L1",
   viewer: "Viewer",
 };
+
+const ALL_ROLES = [
+  { value: "admin",              label: "Admin" },
+  { value: "soc_manager",        label: "SOC Manager" },
+  { value: "detection_engineer", label: "Detection Engineer" },
+  { value: "soc_l2",             label: "SOC L2 Analyst" },
+  { value: "soc_l1",             label: "SOC L1 Analyst" },
+  { value: "viewer",             label: "Viewer / Auditor" },
+];
 
 const STATUS_COLORS: Record<string, string> = {
   active: "text-green-400",
@@ -230,8 +243,8 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
             onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
             className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
-            {Object.entries({ admin: "Admin", soc_l2: "SOC L2 Analyst", soc_l1: "SOC L1 Analyst", viewer: "Viewer / Auditor" }).map(([v, l]) => (
-              <option key={v} value={v}>{l}</option>
+            {ALL_ROLES.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
             ))}
           </select>
         </div>
@@ -272,8 +285,8 @@ function EditRoleModal({ user, onClose, onUpdated }: { user: ApiUser; onClose: (
           onChange={e => setRole(e.target.value)}
           className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
         >
-          {Object.entries({ admin: "Admin", soc_l2: "SOC L2 Analyst", soc_l1: "SOC L1 Analyst", viewer: "Viewer / Auditor" }).map(([v, l]) => (
-            <option key={v} value={v}>{l}</option>
+          {ALL_ROLES.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
           ))}
         </select>
         <div className="flex gap-3">

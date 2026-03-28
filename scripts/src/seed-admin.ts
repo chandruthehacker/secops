@@ -19,11 +19,13 @@ async function seed() {
     }
 
     const users = [
-      { username: "admin",  email: "admin@secops.local",  password: "Admin@SecOps1!",  role: "admin",  displayName: "Admin User" },
-      { username: "alice",  email: "alice@secops.local",  password: "Analyst@1234!",   role: "soc_l2", displayName: "Alice Analyst" },
-      { username: "bob",    email: "bob@secops.local",    password: "Analyst@1234!",   role: "soc_l1", displayName: "Bob Chen" },
-      { username: "diana",  email: "diana@secops.local",  password: "Analyst@1234!",   role: "soc_l2", displayName: "Diana Park" },
-      { username: "viewer", email: "viewer@secops.local", password: "Viewer@1234!",    role: "viewer", displayName: "Audit Viewer" },
+      { username: "admin",   email: "admin@secops.local",   password: "Admin@SecOps1!",   role: "admin",              displayName: "Admin User" },
+      { username: "morgan",  email: "morgan@secops.local",  password: "Manager@1234!",     role: "soc_manager",        displayName: "Morgan Lee" },
+      { username: "elena",   email: "elena@secops.local",   password: "Engineer@1234!",    role: "detection_engineer", displayName: "Elena Ramos" },
+      { username: "alice",   email: "alice@secops.local",   password: "Analyst@1234!",     role: "soc_l2",             displayName: "Alice Analyst" },
+      { username: "bob",     email: "bob@secops.local",     password: "Analyst@1234!",     role: "soc_l1",             displayName: "Bob Chen" },
+      { username: "diana",   email: "diana@secops.local",   password: "Analyst@1234!",     role: "soc_l2",             displayName: "Diana Park" },
+      { username: "viewer",  email: "viewer@secops.local",  password: "Viewer@1234!",      role: "viewer",             displayName: "Audit Viewer" },
     ];
 
     for (const u of users) {

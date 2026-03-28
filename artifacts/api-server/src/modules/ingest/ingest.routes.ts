@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../../middlewares/auth.middleware";
-import { requireMinRole } from "../../middlewares/rbac.middleware";
+import { can } from "../../middlewares/rbac.middleware";
 import { db, rawLogsTable, alertsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logAuditEvent } from "../../lib/audit";
@@ -8,7 +8,7 @@ import type { Request, Response } from "express";
 
 const router = Router();
 
-router.post("/ingest-log", requireAuth, requireMinRole("soc_l2"), async (req: Request, res: Response) => {
+router.post("/ingest-log", requireAuth, can("ingest:write"), async (req: Request, res: Response) => {
   const { source, severity, eventType, sourceIp, destIp, hostname, username, message, rawData } = req.body;
 
   if (!source) {
@@ -38,7 +38,7 @@ router.post("/ingest-log", requireAuth, requireMinRole("soc_l2"), async (req: Re
   });
 });
 
-router.get("/ingest/pending", requireAuth, requireMinRole("soc_l2"), async (req: Request, res: Response) => {
+router.get("/ingest/pending", requireAuth, can("ingest:pending"), async (req: Request, res: Response) => {
   const limit = Number(req.query.limit ?? 100);
   const logs = await db.select().from(rawLogsTable)
     .where(eq(rawLogsTable.processed, "false"))
@@ -46,7 +46,7 @@ router.get("/ingest/pending", requireAuth, requireMinRole("soc_l2"), async (req:
   res.json({ logs, count: logs.length });
 });
 
-router.post("/ingest/detections", requireAuth, requireMinRole("soc_l2"), async (req: Request, res: Response) => {
+router.post("/ingest/detections", requireAuth, can("ingest:write"), async (req: Request, res: Response) => {
   const { detections } = req.body;
   if (!Array.isArray(detections)) {
     res.status(400).json({ error: "detections must be an array" });

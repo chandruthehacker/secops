@@ -9,29 +9,33 @@ import {
 } from 'lucide-react';
 
 const NAV_ITEMS = [
-  { href: '/', icon: LayoutDashboard, label: 'Dashboard', minRole: 'viewer' },
-  { href: '/logs', icon: Terminal, label: 'Logs Explorer', minRole: 'viewer' },
-  { href: '/alerts', icon: AlertTriangle, label: 'Alert Queue', badge: true, minRole: 'viewer' },
-  { href: '/rules', icon: Shield, label: 'Detection Rules', minRole: 'viewer' },
-  { href: '/mitre', icon: Target, label: 'MITRE ATT&CK', minRole: 'viewer' },
-  { href: '/ingestion', icon: Database, label: 'Log Ingestion', minRole: 'soc_l2' },
-  { href: '/settings', icon: Settings, label: 'Settings', minRole: 'viewer' },
+  { href: '/', icon: LayoutDashboard, label: 'Dashboard', permission: 'reports:view' as const },
+  { href: '/logs', icon: Terminal, label: 'Logs Explorer', permission: 'alerts:view' as const },
+  { href: '/alerts', icon: AlertTriangle, label: 'Alert Queue', badge: true, permission: 'alerts:view' as const },
+  { href: '/rules', icon: Shield, label: 'Detection Rules', permission: 'rules:view' as const },
+  { href: '/mitre', icon: Target, label: 'MITRE ATT&CK', permission: 'reports:view' as const },
+  { href: '/ingestion', icon: Database, label: 'Log Ingestion', permission: 'ingest:write' as const },
+  { href: '/settings', icon: Settings, label: 'Settings', permission: 'reports:view' as const },
 ];
 
 const ADMIN_NAV = [
-  { href: '/users', icon: Users, label: 'User Management' },
-  { href: '/audit', icon: ClipboardList, label: 'Audit Logs' },
+  { href: '/users', icon: Users, label: 'User Management', permission: 'users:manage' as const },
+  { href: '/audit', icon: ClipboardList, label: 'Audit Logs', permission: 'audit:view' as const },
 ];
 
-const ROLE_LABELS: Record<string, string> = {
+export const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
+  soc_manager: 'SOC Manager',
+  detection_engineer: 'Det. Engineer',
   soc_l2: 'SOC L2',
   soc_l1: 'SOC L1',
   viewer: 'Viewer',
 };
 
-const ROLE_COLORS: Record<string, string> = {
+export const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-red-500/15 text-red-400 border-red-500/30',
+  soc_manager: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  detection_engineer: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
   soc_l2: 'bg-primary/15 text-primary border-primary/30',
   soc_l1: 'bg-green-500/15 text-green-400 border-green-500/30',
   viewer: 'bg-muted text-muted-foreground border-border',
@@ -40,7 +44,7 @@ const ROLE_COLORS: Record<string, string> = {
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { sidebarCollapsed, toggleSidebar, alerts } = useAppStore();
-  const { user, logout, hasMinRole } = useAuthStore();
+  const { user, logout, can } = useAuthStore();
   
   const newAlertsCount = alerts.filter(a => a.status === 'new').length;
 
@@ -66,7 +70,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.filter(item => hasMinRole(item.minRole as any)).map((item) => {
+          {NAV_ITEMS.filter(item => can(item.permission)).map((item) => {
             const active = location === item.href || (item.href !== '/' && location.startsWith(item.href));
             return (
               <Link 
@@ -98,15 +102,17 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             );
           })}
 
-          {hasMinRole('admin') && (
+          {ADMIN_NAV.some(item => can(item.permission)) && (
             <>
               {!sidebarCollapsed && (
                 <div className="px-3 pt-4 pb-1">
-                  <p className="text-xs text-muted-foreground/60 uppercase tracking-wider font-medium">Admin</p>
+                  <p className="text-xs text-muted-foreground/60 uppercase tracking-wider font-medium">
+                    {can('users:manage') ? 'Admin' : 'Reports'}
+                  </p>
                 </div>
               )}
               {sidebarCollapsed && <div className="border-t border-border/50 mx-2 my-2" />}
-              {ADMIN_NAV.map((item) => {
+              {ADMIN_NAV.filter(item => can(item.permission)).map((item) => {
                 const active = location.startsWith(item.href);
                 return (
                   <Link 

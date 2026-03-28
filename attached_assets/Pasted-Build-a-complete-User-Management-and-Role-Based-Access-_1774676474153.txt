@@ -1,0 +1,99 @@
+Build a complete User Management and Role-Based Access Control (RBAC) system for my web application "SecOps Console" (Mini SIEM).
+
+Current Problem:
+
+* All users can perform all actions
+* SOC L1 analysts can assign alerts, create rules, and delete rules (this is incorrect)
+* No role separation or permission control exists
+
+Goal:
+Implement a secure, production-like RBAC system similar to real SIEM platforms like Splunk.
+
+Requirements:
+
+1. User Management System:
+
+* Admin can create, update, delete users
+* Fields: username, email, password (hashed), role, status (active/inactive)
+* Login authentication (JWT or session-based)
+* Password hashing using bcrypt
+* Ability to disable users without deleting them
+
+2. Define Roles (STRICT SOC hierarchy):
+
+* SOC_L1 (Junior Analyst):
+
+  * View alerts
+  * Add notes/comments
+  * Change alert status (open → in-progress → escalated)
+  * Cannot assign alerts
+  * Cannot create/edit/delete rules
+
+* SOC_L2 (Senior Analyst):
+
+  * All SOC_L1 permissions +
+  * Assign alerts to users
+  * Investigate alerts
+  * Escalate or close alerts
+
+* SOC_MANAGER:
+
+  * All SOC_L2 permissions +
+  * View reports and dashboards
+  * Manage alert priorities
+  * Cannot modify detection rules
+
+* DETECTION_ENGINEER:
+
+  * Create detection rules
+  * Edit rules
+  * Delete rules
+  * Test rules
+  * Cannot manage users
+
+* ADMIN:
+
+  * Full access
+  * Manage users and roles
+  * System configuration
+
+3. Permission Enforcement:
+
+* Backend must enforce permissions (not just UI)
+* Use middleware to check role before API execution
+* Block unauthorized actions with proper error messages (403 Forbidden)
+
+4. UI Requirements:
+
+* Role-based UI rendering (hide buttons if no permission)
+* Admin dashboard for user management
+* Role display in user profile
+* Audit log: track who did what (optional but preferred)
+
+5. Database Design:
+
+* Users table
+* Roles table (or enum)
+* Permissions mapping (optional advanced)
+* Alerts assignedTo field
+* Rules createdBy field
+
+6. Security:
+
+* Password hashing (bcrypt)
+* JWT authentication with role embedded
+* Token validation middleware
+
+7. Extra (Bonus):
+
+* Audit logs (who created/deleted rules, assigned alerts)
+* Session expiry / logout handling
+
+Output:
+
+* Full backend architecture (controllers, middleware, models)
+* API endpoints for user and role management
+* Frontend UI structure for user management panel
+* Clean and scalable folder structure
+
+Also improve the UI/UX and make the system look like a professional SOC dashboard similar to Splunk or IBM QRadar.

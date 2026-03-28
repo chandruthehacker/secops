@@ -110,18 +110,20 @@ export default function LoginPage() {
             <p className="text-xs text-muted-foreground text-center mb-3">Demo Credentials</p>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { label: "Admin", user: "admin", pass: "Admin@SecOps1!" },
-                { label: "SOC L2", user: "alice", pass: "Analyst@1234!" },
-                { label: "SOC L1", user: "bob", pass: "Analyst@1234!" },
-                { label: "Viewer", user: "viewer", pass: "Viewer@1234!" },
-              ].map(({ label, user, pass }) => (
+                { label: "Admin",        color: "text-red-400",    user: "admin",  pass: "Admin@SecOps1!" },
+                { label: "SOC Manager",  color: "text-purple-400", user: "morgan", pass: "Manager@1234!" },
+                { label: "Det. Engineer",color: "text-amber-400",  user: "elena",  pass: "Engineer@1234!" },
+                { label: "SOC L2",       color: "text-primary",    user: "alice",  pass: "Analyst@1234!" },
+                { label: "SOC L1",       color: "text-green-400",  user: "bob",    pass: "Analyst@1234!" },
+                { label: "Viewer",       color: "text-muted-foreground", user: "viewer", pass: "Viewer@1234!" },
+              ].map(({ label, color, user, pass }) => (
                 <button
                   key={user}
                   type="button"
                   onClick={() => { setIdentifier(user); setPassword(pass); }}
                   className="text-left px-3 py-2 bg-background border border-border/50 hover:border-primary/50 rounded-lg transition-colors group"
                 >
-                  <div className="text-xs font-medium text-primary group-hover:text-primary">{label}</div>
+                  <div className={`text-xs font-medium ${color}`}>{label}</div>
                   <div className="text-xs text-muted-foreground">{user}</div>
                 </button>
               ))}

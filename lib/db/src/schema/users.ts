@@ -1,8 +1,15 @@
-import { pgTable, text, uuid, timestamp, pgEnum, boolean, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, timestamp, pgEnum, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const roleEnum = pgEnum("user_role", ["admin", "soc_l2", "soc_l1", "viewer"]);
+export const roleEnum = pgEnum("user_role", [
+  "admin",
+  "soc_manager",
+  "detection_engineer",
+  "soc_l2",
+  "soc_l1",
+  "viewer",
+]);
 export const userStatusEnum = pgEnum("user_status", ["active", "inactive", "locked"]);
 
 export const usersTable = pgTable("users", {
@@ -37,4 +44,10 @@ export const selectUserSchema = createSelectSchema(usersTable).omit({ passwordHa
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof usersTable.$inferSelect;
 export type SafeUser = Omit<User, "passwordHash">;
-export type UserRole = "admin" | "soc_l2" | "soc_l1" | "viewer";
+export type UserRole =
+  | "admin"
+  | "soc_manager"
+  | "detection_engineer"
+  | "soc_l2"
+  | "soc_l1"
+  | "viewer";

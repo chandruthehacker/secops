@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAppStore } from '@/store';
+import { useAuthStore } from '@/store/authStore';
 import { format } from 'date-fns';
 import { SeverityBadge, StatusBadge } from '@/components/ui/Badge';
-import { Search, Filter, ShieldAlert, CheckSquare, Clock, Target, ChevronDown, UserCheck, XCircle, CheckCircle2, AlertTriangle, Square } from 'lucide-react';
+import { Search, ShieldAlert, CheckSquare, Clock, Target, ChevronDown, UserCheck, XCircle, CheckCircle2, AlertTriangle, Square } from 'lucide-react';
 import { Link } from 'wouter';
 import { AlertStatus, Severity } from '@/lib/types';
 
@@ -13,6 +14,10 @@ const ANALYSTS = ['Alice (L1)', 'Bob (L2)', 'Charlie (L3)', 'Diana (L1)', 'Eve (
 
 export default function AlertQueuePage() {
   const { alerts, updateAlertStatus, assignAlert } = useAppStore();
+  const { can } = useAuthStore();
+  const canClose  = can('alerts:close');
+  const canAssign = can('alerts:assign');
+  const canTriage = can('alerts:triage');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
@@ -127,32 +132,40 @@ export default function AlertQueuePage() {
             <div className="px-4 py-2.5 bg-primary/5 border-b border-primary/20 flex items-center gap-4 text-sm">
               <span className="text-primary font-medium">{selectedIds.size} selected</span>
               <div className="flex gap-2 ml-auto flex-wrap">
-                <button onClick={() => bulkUpdate('investigating')} className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors text-xs font-medium">
-                  <AlertTriangle className="w-3.5 h-3.5" /> Set Investigating
-                </button>
-                <button onClick={() => bulkUpdate('resolved')} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg hover:bg-emerald-500/20 transition-colors text-xs font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Resolve
-                </button>
-                <button onClick={() => bulkUpdate('false_positive')} className="flex items-center gap-1.5 px-3 py-1.5 bg-secondary text-muted-foreground border border-border rounded-lg hover:bg-secondary/80 transition-colors text-xs font-medium">
-                  <XCircle className="w-3.5 h-3.5" /> False Positive
-                </button>
-                <div className="relative">
-                  <button
-                    onClick={() => setBulkAssignOpen(!bulkAssignOpen)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary border border-primary/20 rounded-lg hover:bg-primary/20 transition-colors text-xs font-medium"
-                  >
-                    <UserCheck className="w-3.5 h-3.5" /> Assign <ChevronDown className="w-3 h-3" />
+                {canTriage && (
+                  <button onClick={() => bulkUpdate('investigating')} className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors text-xs font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Set Investigating
                   </button>
-                  {bulkAssignOpen && (
-                    <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-20 py-1 min-w-[140px]">
-                      {ANALYSTS.map(a => (
-                        <button key={a} onClick={() => bulkAssign(a)} className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors">
-                          {a}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
+                {canClose && (
+                  <>
+                    <button onClick={() => bulkUpdate('resolved')} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg hover:bg-emerald-500/20 transition-colors text-xs font-medium">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Resolve
+                    </button>
+                    <button onClick={() => bulkUpdate('false_positive')} className="flex items-center gap-1.5 px-3 py-1.5 bg-secondary text-muted-foreground border border-border rounded-lg hover:bg-secondary/80 transition-colors text-xs font-medium">
+                      <XCircle className="w-3.5 h-3.5" /> False Positive
+                    </button>
+                  </>
+                )}
+                {canAssign && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setBulkAssignOpen(!bulkAssignOpen)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary border border-primary/20 rounded-lg hover:bg-primary/20 transition-colors text-xs font-medium"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" /> Assign <ChevronDown className="w-3 h-3" />
+                    </button>
+                    {bulkAssignOpen && (
+                      <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-20 py-1 min-w-[140px]">
+                        {ANALYSTS.map(a => (
+                          <button key={a} onClick={() => bulkAssign(a)} className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors">
+                            {a}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button onClick={clearSelection} className="text-xs text-muted-foreground hover:text-foreground">Clear</button>
               </div>
             </div>
@@ -225,7 +238,7 @@ export default function AlertQueuePage() {
                     </td>
                     <td className="px-4 py-3.5 text-right">
                       <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {alert.status !== 'resolved' && (
+                        {canClose && alert.status !== 'resolved' && (
                           <button
                             onClick={e => handleQuickAction(e, alert.id, 'resolved')}
                             title="Resolve"
@@ -234,7 +247,7 @@ export default function AlertQueuePage() {
                             <CheckCircle2 className="w-4 h-4" />
                           </button>
                         )}
-                        {alert.status === 'new' && (
+                        {canTriage && alert.status === 'new' && (
                           <button
                             onClick={e => handleQuickAction(e, alert.id, 'investigating')}
                             title="Investigate"
