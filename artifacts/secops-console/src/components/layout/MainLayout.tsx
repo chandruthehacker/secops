@@ -1,19 +1,20 @@
-import React from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useAppStore } from '@/store';
 import { useAuthStore } from '@/store/authStore';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { alertsApi } from '@/lib/api';
 import { 
   LayoutDashboard, Terminal, AlertTriangle, Shield, 
   Target, Database, Settings, Menu, Bell, Users, ClipboardList,
-  LogOut, ChevronRight
+  LogOut, ChevronRight, Server, Wifi, WifiOff
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/', icon: LayoutDashboard, label: 'Dashboard', permission: 'reports:view' as const },
   { href: '/logs', icon: Terminal, label: 'Logs Explorer', permission: 'alerts:view' as const },
   { href: '/alerts', icon: AlertTriangle, label: 'Alert Queue', badge: true, permission: 'alerts:view' as const },
+  { href: '/assets', icon: Server, label: 'Asset Inventory', permission: 'alerts:view' as const },
   { href: '/rules', icon: Shield, label: 'Detection Rules', permission: 'rules:view' as const },
   { href: '/mitre', icon: Target, label: 'MITRE ATT&CK', permission: 'reports:view' as const },
   { href: '/ingestion', icon: Database, label: 'Log Ingestion', permission: 'ingest:write' as const },
@@ -47,6 +48,11 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { sidebarCollapsed, toggleSidebar } = useAppStore();
   const { user, logout, can, isAuthenticated } = useAuthStore();
+  const queryClient = useQueryClient();
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsAlertToast, setWsAlertToast] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: newAlertsCount = 0 } = useQuery({
     queryKey: ['alerts-count', 'new'],
@@ -54,6 +60,39 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
     refetchInterval: 30_000,
     enabled: isAuthenticated,
   });
+
+  const connectWs = useCallback(() => {
+    if (!isAuthenticated || wsRef.current?.readyState === WebSocket.OPEN) return;
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/alerts`);
+      wsRef.current = ws;
+      ws.onopen = () => { setWsConnected(true); if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current); };
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'new_alert' && msg.data) {
+            queryClient.invalidateQueries({ queryKey: ['alerts'] });
+            queryClient.invalidateQueries({ queryKey: ['alerts-count'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            const title = msg.data.title ?? 'New Alert';
+            setWsAlertToast(title);
+            setTimeout(() => setWsAlertToast(null), 5000);
+          }
+        } catch {}
+      };
+      ws.onclose = () => { setWsConnected(false); wsRef.current = null; wsReconnectRef.current = setTimeout(connectWs, 6000); };
+      ws.onerror = () => ws.close();
+    } catch {}
+  }, [isAuthenticated, queryClient]);
+
+  useEffect(() => {
+    connectWs();
+    return () => {
+      if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current);
+      wsRef.current?.close();
+    };
+  }, [connectWs]);
 
   const displayName = user?.displayName ?? user?.username ?? 'User';
   const initials = displayName.split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase();
@@ -194,6 +233,20 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* WS status */}
+            <div className="flex items-center gap-1.5" title={wsConnected ? 'Live alerts connected' : 'Reconnecting...'}>
+              {wsConnected ? (
+                <Wifi className="w-4 h-4 text-green-400" />
+              ) : (
+                <WifiOff className="w-4 h-4 text-muted-foreground animate-pulse" />
+              )}
+              {!sidebarCollapsed && (
+                <span className={`text-xs ${wsConnected ? 'text-green-400' : 'text-muted-foreground'}`}>
+                  {wsConnected ? 'Live' : 'Offline'}
+                </span>
+              )}
+            </div>
+            <div className="w-px h-6 bg-border" />
             <button className="relative p-2 rounded-full hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
               <Bell className="w-5 h-5" />
               {newAlertsCount > 0 && (
@@ -211,6 +264,19 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </div>
+          
+          {/* WebSocket alert toast */}
+          {wsAlertToast && (
+            <div className="fixed top-20 right-4 z-50 bg-card border border-primary/40 rounded-xl px-4 py-3 shadow-2xl flex items-start gap-3 max-w-xs animate-in slide-in-from-right-4 duration-300">
+              <div className="w-8 h-8 rounded-full bg-destructive/10 flex items-center justify-center shrink-0">
+                <Bell className="w-4 h-4 text-destructive" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">New Alert</p>
+                <p className="text-sm text-foreground font-medium mt-0.5 line-clamp-2">{wsAlertToast}</p>
+              </div>
+            </div>
+          )}
         </header>
 
         {/* Page Content */}

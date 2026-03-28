@@ -19,6 +19,7 @@ import SettingsPage from "@/pages/SettingsPage";
 import LoginPage from "@/pages/LoginPage";
 import UserManagementPage from "@/pages/UserManagementPage";
 import AuditLogPage from "@/pages/AuditLogPage";
+import AssetsPage from "@/pages/AssetsPage";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -80,6 +81,7 @@ function Router() {
       <Route path="/settings" component={() => <ProtectedRoute component={SettingsPage} />} />
       <Route path="/users" component={() => <ProtectedRoute component={UserManagementPage} permission="users:manage" />} />
       <Route path="/audit" component={() => <ProtectedRoute component={AuditLogPage} permission="audit:view" />} />
+      <Route path="/assets" component={() => <ProtectedRoute component={AssetsPage} />} />
       <Route component={NotFound} />
     </Switch>
   );

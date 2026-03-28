@@ -80,9 +80,14 @@ export default function AlertQueuePage() {
   const clearSelection = () => setSelectedIds(new Set());
   const isAllSelected = alerts.length > 0 && alerts.every(a => selectedIds.has(a.id));
 
+  const bulkMutation = useMutation({
+    mutationFn: ({ ids, status }: { ids: string[]; status: AlertStatus }) => alertsApi.bulkUpdate(ids, status),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['alerts'] }); setSelectedIds(new Set()); },
+  });
+
   const bulkUpdate = (status: AlertStatus) => {
-    selectedIds.forEach(id => statusMutation.mutate({ id, status }));
-    setSelectedIds(new Set());
+    if (selectedIds.size === 0) return;
+    bulkMutation.mutate({ ids: Array.from(selectedIds), status });
   };
   const bulkAssign = (userId: string) => {
     selectedIds.forEach(id => assignMutation.mutate({ id, userId }));

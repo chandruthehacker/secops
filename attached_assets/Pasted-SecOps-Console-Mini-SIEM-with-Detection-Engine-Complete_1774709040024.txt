@@ -1,0 +1,2379 @@
+SecOps Console — Mini SIEM with Detection Engine: Complete System Blueprint
+1. High-Level Architecture
+text
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         LOG SOURCES                                     │
+│  Windows Event Logs │ Linux Syslog │ Firewall Logs │ Auth Logs          │
+└────────┬────────────┬──────────────┬───────────────┬────────────────────┘
+         │            │              │               │
+         ▼            ▼              ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     INGESTION LAYER                                     │
+│  ┌──────────┐  ┌──────────────┐  ┌─────────────┐  ┌─────────────────┐ │
+│  │ REST API │  │ Syslog Server│  │ File Watcher│  │ Agent Receiver  │ │
+│  │ Receiver │  │ (UDP/TCP)    │  │ (tail -f)   │  │ (WEF/Beats)    │ │
+│  └────┬─────┘  └──────┬───────┘  └──────┬──────┘  └───────┬─────────┘ │
+│       └───────────┬────┴────────────┬────┘                 │           │
+│                   ▼                 ▼                      ▼           │
+│            ┌──────────────────────────────────────────────────┐        │
+│            │           MESSAGE QUEUE (Redis Streams)          │        │
+│            └──────────────────────┬───────────────────────────┘        │
+└───────────────────────────────────┼─────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    PROCESSING PIPELINE                                  │
+│  ┌────────────┐  ┌──────────────┐  ┌───────────────┐  ┌────────────┐  │
+│  │  Parser &  │─▶│ Normalizer   │─▶│  Enrichment   │─▶│ Detection  │  │
+│  │  Decoder   │  │ (Unified     │  │  (GeoIP, DNS, │  │ Engine     │  │
+│  │            │  │  Schema)     │  │   Asset Tags)  │  │            │  │
+│  └────────────┘  └──────────────┘  └───────────────┘  └─────┬──────┘  │
+└──────────────────────────────────────────────────────────────┼──────────┘
+                                    │                          │
+                    ┌───────────────┼──────────────────────────┘
+                    ▼               ▼
+┌──────────────────────┐  ┌─────────────────────┐
+│  EVENT STORE         │  │  ALERT STORE        │
+│  (Elasticsearch /    │  │  (PostgreSQL)       │
+│   OpenSearch)        │  │                     │
+└──────────┬───────────┘  └──────────┬──────────┘
+           │                         │
+           ▼                         ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       APPLICATION SERVER                                │
+│              (FastAPI — REST API + WebSocket)                           │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       WEB FRONTEND                                      │
+│                  (React + TypeScript)                                   │
+│  Dashboard │ Alert Queue │ Log Explorer │ Detection Rules │ Settings   │
+└─────────────────────────────────────────────────────────────────────────┘
+2. Technology Stack (Concrete Choices)
+Layer	Technology	Rationale
+Ingestion API	FastAPI (Python 3.11+)	Async, high-throughput, native Pydantic validation
+Syslog Receiver	Custom asyncio UDP/TCP server	Lightweight, no external dependency
+Message Queue	Redis Streams	Persistent, consumer groups, lightweight vs Kafka
+Event Storage	OpenSearch 2.x	Full-text search, aggregations, log-scale storage
+Relational Store	PostgreSQL 15	Alerts, rules, users, audit trail — ACID-compliant
+Cache	Redis	Session cache, rate-limiting counters, rule cache
+Detection Engine	Custom Python engine	YAML rule parsing, condition evaluation
+Frontend	React 18 + TypeScript + TanStack Query	Real-time updates, complex filtering UI
+Real-time Push	WebSocket (FastAPI native)	Alert notifications, live log tailing
+Task Scheduling	Celery + Redis broker	Periodic rule sweeps, report generation
+Containerization	Docker + Docker Compose	Single-command deployment
+3. Unified Event Schema (Normalized Form)
+Every log, regardless of source, gets normalized into this structure before storage and detection.
+
+Python
+
+# schemas/normalized_event.py
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Optional
+from enum import Enum
+from uuid import uuid4
+
+class EventSeverity(str, Enum):
+    INFORMATIONAL = "informational"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+class EventCategory(str, Enum):
+    AUTHENTICATION = "authentication"
+    PROCESS = "process"
+    NETWORK = "network"
+    FILE = "file"
+    REGISTRY = "registry"
+    FIREWALL = "firewall"
+    SYSTEM = "system"
+    THREAT = "threat"
+
+class NormalizedEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: str(uuid4()))
+    timestamp: datetime                          # When the event occurred
+    ingested_at: datetime                        # When we received it
+    source_type: str                             # "windows_eventlog", "syslog", "firewall", "auth_log"
+    source_host: str                             # Originating host FQDN or IP
+    source_ip: Optional[str] = None
+    
+    # Classification
+    category: EventCategory
+    action: str                                  # "login_success", "process_create", "connection_blocked"
+    outcome: Optional[str] = None                # "success", "failure"
+    severity: EventSeverity = EventSeverity.INFORMATIONAL
+    
+    # Subject (who)
+    user_name: Optional[str] = None
+    user_domain: Optional[str] = None
+    user_id: Optional[str] = None
+    
+    # Process context
+    process_name: Optional[str] = None
+    process_id: Optional[int] = None
+    process_command_line: Optional[str] = None
+    parent_process_name: Optional[str] = None
+    parent_process_id: Optional[int] = None
+    
+    # Network context
+    src_ip: Optional[str] = None
+    src_port: Optional[int] = None
+    dst_ip: Optional[str] = None
+    dst_port: Optional[int] = None
+    protocol: Optional[str] = None
+    bytes_sent: Optional[int] = None
+    bytes_received: Optional[int] = None
+    
+    # File context
+    file_path: Optional[str] = None
+    file_hash_sha256: Optional[str] = None
+    
+    # Registry context (Windows)
+    registry_key: Optional[str] = None
+    registry_value: Optional[str] = None
+    
+    # Enrichment (populated post-normalization)
+    geo_country: Optional[str] = None
+    geo_city: Optional[str] = None
+    asset_criticality: Optional[str] = None      # "high", "medium", "low"
+    asset_tags: list[str] = Field(default_factory=list)  # ["domain_controller", "production"]
+    
+    # Raw
+    raw_log: str                                 # Original unparsed log line
+    
+    # Indexing helpers
+    tags: list[str] = Field(default_factory=list)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "event_id": "a1b2c3d4-...",
+                "timestamp": "2024-01-15T08:23:41.000Z",
+                "source_type": "windows_eventlog",
+                "source_host": "DC01.corp.local",
+                "category": "authentication",
+                "action": "login_failure",
+                "outcome": "failure",
+                "user_name": "admin",
+                "user_domain": "CORP",
+                "src_ip": "10.0.1.55",
+                "raw_log": "<original XML>"
+            }
+        }
+OpenSearch Index Mapping
+JSON
+
+{
+  "secops-events-2024.01.15": {
+    "settings": {
+      "number_of_shards": 2,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "secops-retention-policy",
+      "refresh_interval": "5s"
+    },
+    "mappings": {
+      "properties": {
+        "event_id":             { "type": "keyword" },
+        "timestamp":            { "type": "date" },
+        "ingested_at":          { "type": "date" },
+        "source_type":          { "type": "keyword" },
+        "source_host":          { "type": "keyword" },
+        "category":             { "type": "keyword" },
+        "action":               { "type": "keyword" },
+        "outcome":              { "type": "keyword" },
+        "severity":             { "type": "keyword" },
+        "user_name":            { "type": "keyword" },
+        "user_domain":          { "type": "keyword" },
+        "process_name":         { "type": "keyword" },
+        "process_command_line": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 2048 }}},
+        "parent_process_name":  { "type": "keyword" },
+        "src_ip":               { "type": "ip" },
+        "src_port":             { "type": "integer" },
+        "dst_ip":               { "type": "ip" },
+        "dst_port":             { "type": "integer" },
+        "protocol":             { "type": "keyword" },
+        "file_path":            { "type": "text", "fields": { "keyword": { "type": "keyword" }}},
+        "file_hash_sha256":     { "type": "keyword" },
+        "registry_key":         { "type": "text", "fields": { "keyword": { "type": "keyword" }}},
+        "geo_country":          { "type": "keyword" },
+        "asset_criticality":    { "type": "keyword" },
+        "asset_tags":           { "type": "keyword" },
+        "raw_log":              { "type": "text", "index": false },
+        "tags":                 { "type": "keyword" }
+      }
+    }
+  }
+}
+Index naming convention: secops-events-YYYY.MM.DD — daily rollover for easy retention management.
+
+4. Log Ingestion & Normalization Pipeline
+4.1 Ingestion Receivers
+Python
+
+# ingestion/receivers/rest_receiver.py
+from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+import redis.asyncio as redis
+
+router = APIRouter(prefix="/api/v1/ingest", tags=["ingestion"])
+
+class RawLogBatch(BaseModel):
+    source_type: str          # "windows_eventlog" | "syslog" | "firewall" | "auth_log"
+    source_host: str
+    logs: list[str]           # Raw log lines or JSON strings
+
+@router.post("/batch")
+async def ingest_batch(batch: RawLogBatch, bg: BackgroundTasks):
+    """
+    Accepts batches of raw logs and pushes them into the processing queue.
+    Used by agents, log forwarders, or manual uploads.
+    """
+    r = redis.from_url("redis://localhost:6379")
+    for log_line in batch.logs:
+        await r.xadd("stream:raw_logs", {
+            "source_type": batch.source_type,
+            "source_host": batch.source_host,
+            "raw": log_line,
+        })
+    return {"accepted": len(batch.logs)}
+
+
+# ingestion/receivers/syslog_receiver.py
+import asyncio
+from datetime import datetime
+
+class SyslogProtocol(asyncio.DatagramProtocol):
+    def __init__(self, redis_client):
+        self.redis = redis_client
+
+    def datagram_received(self, data, addr):
+        message = data.decode("utf-8", errors="replace")
+        asyncio.ensure_future(self.redis.xadd("stream:raw_logs", {
+            "source_type": "syslog",
+            "source_host": addr[0],
+            "raw": message,
+        }))
+
+async def start_syslog_server(host="0.0.0.0", port=1514):
+    import redis.asyncio as redis
+    r = redis.from_url("redis://localhost:6379")
+    loop = asyncio.get_event_loop()
+    transport, protocol = await loop.create_datagram_endpoint(
+        lambda: SyslogProtocol(r),
+        local_addr=(host, port)
+    )
+    return transport
+4.2 Parsers (One per Source Type)
+Python
+
+# ingestion/parsers/base.py
+from abc import ABC, abstractmethod
+from schemas.normalized_event import NormalizedEvent
+
+class BaseParser(ABC):
+    @abstractmethod
+    def parse(self, raw_log: str, source_host: str) -> NormalizedEvent | None:
+        """Parse a raw log line into a NormalizedEvent. Return None if unparseable."""
+        ...
+
+# ingestion/parsers/windows_eventlog.py
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from schemas.normalized_event import NormalizedEvent, EventCategory, EventSeverity
+
+# Mapping of Windows Event IDs to our normalized actions and categories
+WINDOWS_EVENT_MAP = {
+    4624: {"category": EventCategory.AUTHENTICATION, "action": "login_success",   "severity": EventSeverity.INFORMATIONAL},
+    4625: {"category": EventCategory.AUTHENTICATION, "action": "login_failure",   "severity": EventSeverity.MEDIUM},
+    4648: {"category": EventCategory.AUTHENTICATION, "action": "explicit_logon",  "severity": EventSeverity.LOW},
+    4672: {"category": EventCategory.AUTHENTICATION, "action": "special_privilege_logon", "severity": EventSeverity.LOW},
+    4688: {"category": EventCategory.PROCESS,        "action": "process_create",  "severity": EventSeverity.INFORMATIONAL},
+    4689: {"category": EventCategory.PROCESS,        "action": "process_terminate","severity": EventSeverity.INFORMATIONAL},
+    4657: {"category": EventCategory.REGISTRY,       "action": "registry_modify", "severity": EventSeverity.LOW},
+    4663: {"category": EventCategory.FILE,           "action": "file_access",     "severity": EventSeverity.INFORMATIONAL},
+    7045: {"category": EventCategory.SYSTEM,         "action": "service_install", "severity": EventSeverity.MEDIUM},
+    1:    {"category": EventCategory.PROCESS,        "action": "process_create",  "severity": EventSeverity.INFORMATIONAL},  # Sysmon
+}
+
+class WindowsEventLogParser(BaseParser):
+    def parse(self, raw_log: str, source_host: str) -> NormalizedEvent | None:
+        try:
+            root = ET.fromstring(raw_log)
+            ns = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+            
+            event_id = int(root.find(".//e:EventID", ns).text)
+            time_created = root.find(".//e:TimeCreated", ns).attrib["SystemTime"]
+            computer = root.find(".//e:Computer", ns).text
+            
+            mapping = WINDOWS_EVENT_MAP.get(event_id, {
+                "category": EventCategory.SYSTEM,
+                "action": f"event_{event_id}",
+                "severity": EventSeverity.INFORMATIONAL,
+            })
+            
+            # Extract EventData fields into a dict
+            event_data = {}
+            for data_elem in root.findall(".//e:EventData/e:Data", ns):
+                name = data_elem.attrib.get("Name", "")
+                event_data[name] = data_elem.text or ""
+            
+            return NormalizedEvent(
+                timestamp=datetime.fromisoformat(time_created.replace("Z", "+00:00")),
+                ingested_at=datetime.utcnow(),
+                source_type="windows_eventlog",
+                source_host=computer or source_host,
+                category=mapping["category"],
+                action=mapping["action"],
+                outcome="success" if event_id in (4624, 4672) else ("failure" if event_id == 4625 else None),
+                severity=mapping["severity"],
+                user_name=event_data.get("TargetUserName") or event_data.get("User"),
+                user_domain=event_data.get("TargetDomainName"),
+                user_id=event_data.get("TargetUserSid"),
+                process_name=event_data.get("NewProcessName") or event_data.get("Image"),
+                process_id=int(event_data["NewProcessId"], 16) if event_data.get("NewProcessId") else None,
+                process_command_line=event_data.get("CommandLine") or event_data.get("ProcessCommandLine"),
+                parent_process_name=event_data.get("ParentImage"),
+                src_ip=event_data.get("IpAddress"),
+                src_port=int(event_data["IpPort"]) if event_data.get("IpPort") else None,
+                raw_log=raw_log,
+            )
+        except Exception:
+            return None
+
+
+# ingestion/parsers/syslog_parser.py
+import re
+from datetime import datetime
+
+# RFC 3164 syslog pattern
+SYSLOG_PATTERN = re.compile(
+    r"<(?P<priority>\d+)>"
+    r"(?P<timestamp>\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<program>\S+?)(?:\[(?P<pid>\d+)\])?:\s+"
+    r"(?P<message>.*)"
+)
+
+class SyslogParser(BaseParser):
+    def parse(self, raw_log: str, source_host: str) -> NormalizedEvent | None:
+        match = SYSLOG_PATTERN.match(raw_log)
+        if not match:
+            return None
+        
+        d = match.groupdict()
+        priority = int(d["priority"])
+        facility = priority >> 3
+        level = priority & 0x07  # 0=emerg ... 7=debug
+        
+        severity_map = {
+            0: EventSeverity.CRITICAL, 1: EventSeverity.CRITICAL,
+            2: EventSeverity.CRITICAL, 3: EventSeverity.HIGH,
+            4: EventSeverity.MEDIUM,   5: EventSeverity.LOW,
+            6: EventSeverity.INFORMATIONAL, 7: EventSeverity.INFORMATIONAL,
+        }
+        
+        # Sub-parse the message for known patterns (SSH, sudo, etc.)
+        category, action, extra = self._classify_message(d["program"], d["message"])
+        
+        return NormalizedEvent(
+            timestamp=self._parse_syslog_timestamp(d["timestamp"]),
+            ingested_at=datetime.utcnow(),
+            source_type="syslog",
+            source_host=d["hostname"] or source_host,
+            category=category,
+            action=action,
+            severity=severity_map.get(level, EventSeverity.INFORMATIONAL),
+            process_name=d["program"],
+            process_id=int(d["pid"]) if d.get("pid") else None,
+            raw_log=raw_log,
+            **extra,
+        )
+    
+    def _classify_message(self, program: str, message: str):
+        extra = {}
+        if program in ("sshd",):
+            if "Accepted" in message:
+                m = re.search(r"Accepted \S+ for (\S+) from ([\d.]+) port (\d+)", message)
+                if m:
+                    extra = {"user_name": m.group(1), "src_ip": m.group(2), "src_port": int(m.group(3)), "outcome": "success"}
+                return EventCategory.AUTHENTICATION, "login_success", extra
+            elif "Failed" in message:
+                m = re.search(r"Failed \S+ for (\S+) from ([\d.]+)", message)
+                if m:
+                    extra = {"user_name": m.group(1), "src_ip": m.group(2), "outcome": "failure"}
+                return EventCategory.AUTHENTICATION, "login_failure", extra
+        elif program in ("sudo",):
+            return EventCategory.AUTHENTICATION, "privilege_escalation", extra
+        
+        return EventCategory.SYSTEM, f"{program}_event", extra
+
+
+# ingestion/parsers/firewall_parser.py  (iptables / pf style)
+class FirewallLogParser(BaseParser):
+    # iptables kernel log pattern
+    IPTABLES_RE = re.compile(
+        r".*\b(?P<action>ACCEPT|DROP|REJECT)\b.*"
+        r"SRC=(?P<src_ip>[\d.]+).*DST=(?P<dst_ip>[\d.]+).*"
+        r"PROTO=(?P<proto>\S+)"
+        r"(?:.*SPT=(?P<spt>\d+))?"
+        r"(?:.*DPT=(?P<dpt>\d+))?"
+    )
+    
+    def parse(self, raw_log: str, source_host: str) -> NormalizedEvent | None:
+        m = self.IPTABLES_RE.search(raw_log)
+        if not m:
+            return None
+        d = m.groupdict()
+        action_map = {"ACCEPT": "connection_allowed", "DROP": "connection_blocked", "REJECT": "connection_rejected"}
+        return NormalizedEvent(
+            timestamp=datetime.utcnow(),
+            ingested_at=datetime.utcnow(),
+            source_type="firewall",
+            source_host=source_host,
+            category=EventCategory.FIREWALL,
+            action=action_map.get(d["action"], "firewall_event"),
+            outcome="success" if d["action"] == "ACCEPT" else "failure",
+            severity=EventSeverity.INFORMATIONAL if d["action"] == "ACCEPT" else EventSeverity.LOW,
+            src_ip=d.get("src_ip"),
+            src_port=int(d["spt"]) if d.get("spt") else None,
+            dst_ip=d.get("dst_ip"),
+            dst_port=int(d["dpt"]) if d.get("dpt") else None,
+            protocol=d.get("proto"),
+            raw_log=raw_log,
+        )
+4.3 Parser Registry & Pipeline Worker
+Python
+
+# ingestion/pipeline.py
+import asyncio
+import redis.asyncio as redis
+from ingestion.parsers.windows_eventlog import WindowsEventLogParser
+from ingestion.parsers.syslog_parser import SyslogParser
+from ingestion.parsers.firewall_parser import FirewallLogParser
+from ingestion.parsers.auth_log_parser import AuthLogParser
+from ingestion.enrichment import enrich_event
+from detection.engine import DetectionEngine
+from storage.opensearch_client import index_event
+from storage.postgres_client import insert_alert
+
+PARSER_REGISTRY = {
+    "windows_eventlog": WindowsEventLogParser(),
+    "syslog":           SyslogParser(),
+    "firewall":         FirewallLogParser(),
+    "auth_log":         AuthLogParser(),
+}
+
+async def pipeline_worker(worker_id: int, detection_engine: DetectionEngine):
+    """
+    Consumes from Redis Stream, parses, normalizes, enriches, 
+    runs detection, stores events and alerts.
+    """
+    r = redis.from_url("redis://localhost:6379")
+    stream = "stream:raw_logs"
+    group = "pipeline_workers"
+    consumer = f"worker-{worker_id}"
+    
+    # Create consumer group if not exists
+    try:
+        await r.xgroup_create(stream, group, id="0", mkstream=True)
+    except redis.ResponseError:
+        pass  # Group already exists
+    
+    while True:
+        # Read up to 50 messages, block for 2 seconds if none
+        messages = await r.xreadgroup(group, consumer, {stream: ">"}, count=50, block=2000)
+        
+        if not messages:
+            continue
+        
+        for stream_name, entries in messages:
+            for msg_id, fields in entries:
+                source_type = fields[b"source_type"].decode()
+                source_host = fields[b"source_host"].decode()
+                raw = fields[b"raw"].decode()
+                
+                parser = PARSER_REGISTRY.get(source_type)
+                if not parser:
+                    await r.xack(stream, group, msg_id)
+                    continue
+                
+                event = parser.parse(raw, source_host)
+                if event is None:
+                    # Store in dead-letter for review
+                    await r.xadd("stream:dead_letter", fields)
+                    await r.xack(stream, group, msg_id)
+                    continue
+                
+                # Enrichment
+                event = await enrich_event(event)
+                
+                # Store normalized event in OpenSearch
+                await index_event(event)
+                
+                # Run detection rules against this event
+                triggered_alerts = detection_engine.evaluate(event)
+                for alert in triggered_alerts:
+                    await insert_alert(alert)
+                    # Push to WebSocket notification channel
+                    await r.publish("channel:new_alerts", alert.model_dump_json())
+                
+                # Acknowledge message
+                await r.xack(stream, group, msg_id)
+
+
+async def start_pipeline(num_workers: int = 4):
+    engine = DetectionEngine()
+    engine.load_rules_from_directory("/etc/secops/rules/")
+    tasks = [pipeline_worker(i, engine) for i in range(num_workers)]
+    await asyncio.gather(*tasks)
+4.4 Enrichment Module
+Python
+
+# ingestion/enrichment.py
+import geoip2.database
+from functools import lru_cache
+from schemas.normalized_event import NormalizedEvent
+
+# Loaded once at startup
+GEO_READER = geoip2.database.Reader("/var/lib/GeoIP/GeoLite2-City.mmdb")
+
+# Asset inventory loaded from config/database
+ASSET_DB: dict[str, dict] = {}  # IP/hostname → {"criticality": "high", "tags": ["dc", "prod"]}
+
+def load_asset_db(pg_pool):
+    """Load asset metadata from PostgreSQL at startup and periodically."""
+    global ASSET_DB
+    rows = pg_pool.execute("SELECT hostname, ip, criticality, tags FROM assets")
+    for row in rows:
+        ASSET_DB[row["hostname"]] = {"criticality": row["criticality"], "tags": row["tags"]}
+        if row["ip"]:
+            ASSET_DB[row["ip"]] = {"criticality": row["criticality"], "tags": row["tags"]}
+
+async def enrich_event(event: NormalizedEvent) -> NormalizedEvent:
+    # GeoIP enrichment for external IPs
+    for ip_field in ("src_ip", "source_ip"):
+        ip = getattr(event, ip_field, None)
+        if ip and not _is_private(ip):
+            try:
+                resp = GEO_READER.city(ip)
+                event.geo_country = resp.country.iso_code
+                event.geo_city = resp.city.name
+            except Exception:
+                pass
+    
+    # Asset metadata enrichment
+    asset_info = ASSET_DB.get(event.source_host) or ASSET_DB.get(event.source_ip)
+    if asset_info:
+        event.asset_criticality = asset_info["criticality"]
+        event.asset_tags = asset_info["tags"]
+    
+    return event
+
+def _is_private(ip: str) -> bool:
+    import ipaddress
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+5. Detection Engine
+5.1 YAML Rule Format (Sigma-Compatible Subset)
+YAML
+
+# rules/brute_force_login.yml
+id: "DET-001"
+name: "Brute Force Login Attempt"
+description: "Detects multiple failed login attempts from a single source IP within 5 minutes"
+author: "SecOps Team"
+created: "2024-01-10"
+modified: "2024-01-15"
+severity: high
+type: threshold             # "simple" | "threshold" | "sequence"
+enabled: true
+
+# What to look for in individual events
+match:
+  category: authentication
+  action: login_failure
+  outcome: failure
+
+# Threshold-specific configuration
+threshold:
+  field: src_ip              # Group by this field
+  count: 5                   # At least N events
+  timeframe: 5m              # Within this window
+
+# Exclusions
+filter:
+  user_name:
+    - "healthcheck"
+    - "monitoring"
+  src_ip:
+    - "10.0.0.1"             # Known scanner
+
+# MITRE mapping
+mitre:
+  tactic: "Credential Access"
+  technique_id: "T1110"
+  technique_name: "Brute Force"
+  subtechnique_id: "T1110.001"
+  subtechnique_name: "Password Guessing"
+
+# Alert configuration
+alert:
+  title_template: "Brute Force: {count} failed logins from {src_ip}"
+  context_fields:            # Fields to include in alert details
+    - src_ip
+    - user_name
+    - source_host
+    - geo_country
+
+tags:
+  - "credential_attack"
+  - "external_threat"
+YAML
+
+# rules/suspicious_powershell.yml
+id: "DET-002"
+name: "Suspicious PowerShell Execution"
+description: "Detects PowerShell with encoded commands or download cradles"
+author: "SecOps Team"
+severity: high
+type: simple
+enabled: true
+
+match:
+  category: process
+  action: process_create
+  process_name|endswith: "powershell.exe"
+  process_command_line|contains|any:
+    - "-EncodedCommand"
+    - "-enc "
+    - "FromBase64String"
+    - "Net.WebClient"
+    - "DownloadString"
+    - "DownloadFile"
+    - "Invoke-Expression"
+    - "IEX"
+    - "Start-BitsTransfer"
+
+filter:
+  user_name:
+    - "SYSTEM"
+  process_command_line|contains:
+    - "WindowsUpdate"
+
+mitre:
+  tactic: "Execution"
+  technique_id: "T1059"
+  technique_name: "Command and Scripting Interpreter"
+  subtechnique_id: "T1059.001"
+  subtechnique_name: "PowerShell"
+
+alert:
+  title_template: "Suspicious PowerShell on {source_host} by {user_name}"
+  context_fields:
+    - source_host
+    - user_name
+    - process_command_line
+    - parent_process_name
+YAML
+
+# rules/lateral_movement_psexec.yml
+id: "DET-005"
+name: "PsExec-style Lateral Movement"
+description: "Detects service installation typical of PsExec lateral movement"
+severity: critical
+type: simple
+enabled: true
+
+match:
+  category: system
+  action: service_install
+  process_name|contains|any:
+    - "PSEXESVC"
+    - "psexec"
+    - "csexec"
+    - "paexec"
+
+mitre:
+  tactic: "Lateral Movement"
+  technique_id: "T1570"
+  technique_name: "Lateral Tool Transfer"
+
+alert:
+  title_template: "PsExec-style service on {source_host}"
+  context_fields:
+    - source_host
+    - process_name
+    - user_name
+5.2 Rule Engine Implementation
+Python
+
+# detection/rule_model.py
+from pydantic import BaseModel
+from typing import Optional, Any
+from enum import Enum
+
+class RuleType(str, Enum):
+    SIMPLE = "simple"
+    THRESHOLD = "threshold"
+
+class MitreMapping(BaseModel):
+    tactic: str
+    technique_id: str
+    technique_name: str
+    subtechnique_id: Optional[str] = None
+    subtechnique_name: Optional[str] = None
+
+class ThresholdConfig(BaseModel):
+    field: str
+    count: int
+    timeframe: str  # "5m", "1h", "24h"
+
+class AlertConfig(BaseModel):
+    title_template: str
+    context_fields: list[str] = []
+
+class DetectionRule(BaseModel):
+    id: str
+    name: str
+    description: str
+    author: str = ""
+    severity: str  # "low", "medium", "high", "critical"
+    type: RuleType
+    enabled: bool = True
+    match: dict[str, Any]
+    filter: dict[str, Any] = {}
+    threshold: Optional[ThresholdConfig] = None
+    mitre: Optional[MitreMapping] = None
+    alert: AlertConfig
+    tags: list[str] = []
+
+
+# detection/engine.py
+import yaml
+import os
+import re
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Optional
+from schemas.normalized_event import NormalizedEvent
+from detection.rule_model import DetectionRule, RuleType
+from detection.alert_model import Alert, AlertSeverity
+
+class ThresholdState:
+    """Tracks event counts per group key within a sliding time window."""
+    def __init__(self, timeframe_seconds: int):
+        self.timeframe = timeframe_seconds
+        self.buckets: dict[str, list[datetime]] = defaultdict(list)
+    
+    def add_and_check(self, key: str, timestamp: datetime, threshold: int) -> tuple[bool, int]:
+        """Add a timestamp for this key, prune old entries, check if threshold met."""
+        cutoff = timestamp - timedelta(seconds=self.timeframe)
+        self.buckets[key] = [t for t in self.buckets[key] if t > cutoff]
+        self.buckets[key].append(timestamp)
+        count = len(self.buckets[key])
+        return count >= threshold, count
+    
+    def clear_key(self, key: str):
+        self.buckets.pop(key, None)
+
+
+class DetectionEngine:
+    def __init__(self):
+        self.rules: list[DetectionRule] = []
+        self.threshold_states: dict[str, ThresholdState] = {}  # rule_id → state
+    
+    def load_rules_from_directory(self, path: str):
+        """Load all YAML rule files from a directory."""
+        self.rules = []
+        for filename in os.listdir(path):
+            if filename.endswith((".yml", ".yaml")):
+                filepath = os.path.join(path, filename)
+                with open(filepath) as f:
+                    raw = yaml.safe_load(f)
+                rule = DetectionRule(**raw)
+                if rule.enabled:
+                    self.rules.append(rule)
+                    if rule.type == RuleType.THRESHOLD and rule.threshold:
+                        tf = self._parse_timeframe(rule.threshold.timeframe)
+                        self.threshold_states[rule.id] = ThresholdState(tf)
+        
+        self.rules.sort(key=lambda r: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(r.severity, 4))
+    
+    def evaluate(self, event: NormalizedEvent) -> list["Alert"]:
+        """Evaluate all rules against a single event. Returns triggered alerts."""
+        alerts = []
+        for rule in self.rules:
+            if not rule.enabled:
+                continue
+            
+            # Check if event matches the rule's match conditions
+            if not self._matches(event, rule.match):
+                continue
+            
+            # Check if event is excluded by filters
+            if rule.filter and self._matches(event, rule.filter):
+                continue
+            
+            if rule.type == RuleType.SIMPLE:
+                alert = self._create_alert(rule, event, matched_events=[event])
+                alerts.append(alert)
+            
+            elif rule.type == RuleType.THRESHOLD:
+                state = self.threshold_states.get(rule.id)
+                if not state or not rule.threshold:
+                    continue
+                key_value = getattr(event, rule.threshold.field, None)
+                if key_value is None:
+                    continue
+                group_key = str(key_value)
+                triggered, count = state.add_and_check(group_key, event.timestamp, rule.threshold.count)
+                if triggered:
+                    alert = self._create_alert(rule, event, matched_events=[event], extra_context={"count": count, rule.threshold.field: group_key})
+                    alerts.append(alert)
+                    state.clear_key(group_key)  # Reset to avoid re-firing every event
+        
+        return alerts
+    
+    def _matches(self, event: NormalizedEvent, conditions: dict) -> bool:
+        """
+        Evaluate match/filter conditions against an event.
+        Supports modifiers: |contains, |endswith, |startswith, |contains|any, |re
+        """
+        for key, expected in conditions.items():
+            # Parse field name and modifiers
+            parts = key.split("|")
+            field_name = parts[0]
+            modifiers = parts[1:]
+            
+            actual = getattr(event, field_name, None)
+            if actual is None:
+                return False
+            
+            actual_str = str(actual).lower()
+            
+            if not modifiers:
+                # Exact match (or list membership)
+                if isinstance(expected, list):
+                    if actual_str not in [str(v).lower() for v in expected]:
+                        return False
+                else:
+                    if actual_str != str(expected).lower():
+                        return False
+            
+            elif modifiers == ["contains"]:
+                if isinstance(expected, list):
+                    if not any(str(v).lower() in actual_str for v in expected):
+                        return False
+                else:
+                    if str(expected).lower() not in actual_str:
+                        return False
+            
+            elif modifiers == ["contains", "any"]:
+                if not isinstance(expected, list):
+                    expected = [expected]
+                if not any(str(v).lower() in actual_str for v in expected):
+                    return False
+            
+            elif modifiers == ["endswith"]:
+                target = str(expected).lower()
+                if not actual_str.endswith(target):
+                    return False
+            
+            elif modifiers == ["startswith"]:
+                target = str(expected).lower()
+                if not actual_str.startswith(target):
+                    return False
+            
+            elif modifiers == ["re"]:
+                if not re.search(str(expected), str(actual), re.IGNORECASE):
+                    return False
+        
+        return True
+    
+    def _create_alert(self, rule: DetectionRule, trigger_event: NormalizedEvent, matched_events: list, extra_context: dict = None) -> "Alert":
+        context = {}
+        for field in rule.alert.context_fields:
+            context[field] = getattr(trigger_event, field, None)
+        if extra_context:
+            context.update(extra_context)
+        
+        # Generate title from template
+        title = rule.alert.title_template.format(**{**trigger_event.model_dump(), **(extra_context or {})})
+        
+        # Compute severity score
+        severity_score = self._compute_severity_score(rule, trigger_event)
+        
+        return Alert(
+            rule_id=rule.id,
+            rule_name=rule.name,
+            title=title,
+            description=rule.description,
+            severity=rule.severity,
+            severity_score=severity_score,
+            mitre_tactic=rule.mitre.tactic if rule.mitre else None,
+            mitre_technique_id=rule.mitre.technique_id if rule.mitre else None,
+            mitre_technique_name=rule.mitre.technique_name if rule.mitre else None,
+            mitre_subtechnique_id=rule.mitre.subtechnique_id if rule.mitre else None,
+            source_host=trigger_event.source_host,
+            trigger_event_id=trigger_event.event_id,
+            trigger_timestamp=trigger_event.timestamp,
+            context=context,
+            tags=rule.tags,
+        )
+    
+    def _compute_severity_score(self, rule: DetectionRule, event: NormalizedEvent) -> int:
+        """
+        Compute a 0-100 severity score based on:
+        - Rule base severity
+        - Asset criticality
+        - User context (admin vs regular)
+        """
+        base_scores = {"critical": 90, "high": 70, "medium": 45, "low": 20}
+        score = base_scores.get(rule.severity, 30)
+        
+        # Boost for critical assets
+        if event.asset_criticality == "high":
+            score = min(100, score + 15)
+        elif event.asset_criticality == "medium":
+            score = min(100, score + 5)
+        
+        # Boost for privileged users
+        if event.user_name and event.user_name.lower() in ("administrator", "admin", "root"):
+            score = min(100, score + 10)
+        
+        # Boost for external source IPs
+        if event.src_ip and event.geo_country and event.geo_country != "US":  # configurable home country
+            score = min(100, score + 5)
+        
+        return score
+    
+    @staticmethod
+    def _parse_timeframe(tf: str) -> int:
+        """Parse '5m', '1h', '24h' into seconds."""
+        units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        match = re.match(r"(\d+)([smhd])", tf)
+        if match:
+            return int(match.group(1)) * units[match.group(2)]
+        return 300  # default 5 min
+6. Alert Data Model (PostgreSQL)
+6.1 Schema
+SQL
+
+-- migrations/001_initial.sql
+
+CREATE TYPE alert_status AS ENUM ('new', 'investigating', 'resolved', 'false_positive');
+CREATE TYPE alert_severity AS ENUM ('low', 'medium', 'high', 'critical');
+
+CREATE TABLE alerts (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id              VARCHAR(64) NOT NULL,
+    rule_name            VARCHAR(256) NOT NULL,
+    title                VARCHAR(512) NOT NULL,
+    description          TEXT,
+    
+    severity             alert_severity NOT NULL,
+    severity_score       INTEGER NOT NULL CHECK (severity_score BETWEEN 0 AND 100),
+    
+    status               alert_status NOT NULL DEFAULT 'new',
+    assigned_to          UUID REFERENCES users(id),
+    
+    -- MITRE ATT&CK
+    mitre_tactic         VARCHAR(128),
+    mitre_technique_id   VARCHAR(32),
+    mitre_technique_name VARCHAR(256),
+    mitre_subtechnique_id VARCHAR(32),
+    
+    -- Source context
+    source_host          VARCHAR(256),
+    trigger_event_id     VARCHAR(64),
+    trigger_timestamp    TIMESTAMPTZ NOT NULL,
+    context              JSONB NOT NULL DEFAULT '{}',  -- Flexible key-value context from rule
+    tags                 TEXT[] DEFAULT '{}',
+    
+    -- Related events (for investigation drill-down)
+    related_event_ids    TEXT[] DEFAULT '{}',
+    
+    -- Lifecycle
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at          TIMESTAMPTZ,
+    resolution_notes     TEXT,
+    
+    -- Deduplication: same rule + same grouping key within a time window
+    dedup_key            VARCHAR(256),
+    
+    CONSTRAINT unique_dedup UNIQUE (dedup_key)
+);
+
+CREATE INDEX idx_alerts_status ON alerts(status);
+CREATE INDEX idx_alerts_severity ON alerts(severity_score DESC);
+CREATE INDEX idx_alerts_created ON alerts(created_at DESC);
+CREATE INDEX idx_alerts_rule_id ON alerts(rule_id);
+CREATE INDEX idx_alerts_assigned ON alerts(assigned_to);
+CREATE INDEX idx_alerts_mitre ON alerts(mitre_technique_id);
+CREATE INDEX idx_alerts_source_host ON alerts(source_host);
+CREATE INDEX idx_alerts_tags ON alerts USING gin(tags);
+
+-- Alert comments / investigation notes
+CREATE TABLE alert_comments (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_id    UUID NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id),
+    comment     TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_comments_alert ON alert_comments(alert_id, created_at);
+
+-- Audit trail for alert status changes
+CREATE TABLE alert_audit_log (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_id      UUID NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    user_id       UUID REFERENCES users(id),  -- NULL for system actions
+    action        VARCHAR(64) NOT NULL,        -- "status_change", "assignment", "comment_added"
+    old_value     VARCHAR(256),
+    new_value     VARCHAR(256),
+    timestamp     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_alert ON alert_audit_log(alert_id, timestamp);
+
+-- Users
+CREATE TABLE users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username      VARCHAR(128) UNIQUE NOT NULL,
+    email         VARCHAR(256) UNIQUE NOT NULL,
+    password_hash VARCHAR(256) NOT NULL,
+    role          VARCHAR(32) NOT NULL DEFAULT 'analyst',  -- 'admin', 'analyst', 'viewer'
+    is_active     BOOLEAN NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Asset inventory (used for enrichment)
+CREATE TABLE assets (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    hostname    VARCHAR(256) UNIQUE NOT NULL,
+    ip          INET,
+    os          VARCHAR(64),
+    criticality VARCHAR(16) NOT NULL DEFAULT 'medium',  -- 'low', 'medium', 'high'
+    tags        TEXT[] DEFAULT '{}',
+    owner       VARCHAR(256),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Detection rules metadata (in-DB supplement to YAML files)
+CREATE TABLE detection_rules (
+    id            VARCHAR(64) PRIMARY KEY,
+    name          VARCHAR(256) NOT NULL,
+    description   TEXT,
+    severity      alert_severity NOT NULL,
+    enabled       BOOLEAN NOT NULL DEFAULT true,
+    rule_yaml     TEXT NOT NULL,               -- Full YAML content for version tracking
+    mitre_technique_id VARCHAR(32),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by    UUID REFERENCES users(id)
+);
+6.2 Alert Pydantic Model
+Python
+
+# detection/alert_model.py
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Optional
+from uuid import uuid4
+from enum import Enum
+
+class AlertStatus(str, Enum):
+    NEW = "new"
+    INVESTIGATING = "investigating"
+    RESOLVED = "resolved"
+    FALSE_POSITIVE = "false_positive"
+
+class Alert(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    rule_id: str
+    rule_name: str
+    title: str
+    description: Optional[str] = None
+    
+    severity: str
+    severity_score: int
+    
+    status: AlertStatus = AlertStatus.NEW
+    assigned_to: Optional[str] = None
+    
+    mitre_tactic: Optional[str] = None
+    mitre_technique_id: Optional[str] = None
+    mitre_technique_name: Optional[str] = None
+    mitre_subtechnique_id: Optional[str] = None
+    
+    source_host: Optional[str] = None
+    trigger_event_id: Optional[str] = None
+    trigger_timestamp: datetime
+    context: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    related_event_ids: list[str] = Field(default_factory=list)
+    
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
+    
+    dedup_key: Optional[str] = None
+7. REST API Design
+7.1 Full Endpoint Map
+Python
+
+# api/main.py
+from fastapi import FastAPI
+from api.routes import alerts, events, rules, users, dashboard, assets
+
+app = FastAPI(
+    title="SecOps Console API",
+    version="1.0.0",
+    docs_url="/api/docs",
+)
+
+app.include_router(alerts.router,    prefix="/api/v1/alerts",    tags=["Alerts"])
+app.include_router(events.router,    prefix="/api/v1/events",    tags=["Events"])
+app.include_router(rules.router,     prefix="/api/v1/rules",     tags=["Detection Rules"])
+app.include_router(users.router,     prefix="/api/v1/users",     tags=["Users"])
+app.include_router(dashboard.router, prefix="/api/v1/dashboard", tags=["Dashboard"])
+app.include_router(assets.router,    prefix="/api/v1/assets",    tags=["Assets"])
+7.2 Alerts API
+Python
+
+# api/routes/alerts.py
+from fastapi import APIRouter, Depends, Query, HTTPException
+from typing import Optional
+from uuid import UUID
+from datetime import datetime
+from pydantic import BaseModel
+
+router = APIRouter()
+
+class AlertListParams(BaseModel):
+    status: Optional[list[str]] = None       # ["new", "investigating"]
+    severity: Optional[list[str]] = None     # ["high", "critical"]
+    assigned_to: Optional[UUID] = None
+    rule_id: Optional[str] = None
+    mitre_technique_id: Optional[str] = None
+    source_host: Optional[str] = None
+    tag: Optional[str] = None
+    time_from: Optional[datetime] = None
+    time_to: Optional[datetime] = None
+    search: Optional[str] = None             # Full-text search on title/description
+    sort_by: str = "severity_score"          # "severity_score", "created_at", "updated_at"
+    sort_order: str = "desc"
+    page: int = 1
+    page_size: int = 50
+
+class AlertStatusUpdate(BaseModel):
+    status: str  # "investigating", "resolved", "false_positive"
+    resolution_notes: Optional[str] = None
+
+class AlertAssignment(BaseModel):
+    assigned_to: UUID
+
+class AlertComment(BaseModel):
+    comment: str
+
+@router.get("/")
+async def list_alerts(params: AlertListParams = Depends()):
+    """
+    List alerts with filtering, sorting, and pagination.
+    Returns: { items: [...], total: int, page: int, pages: int }
+    """
+    ...
+
+@router.get("/{alert_id}")
+async def get_alert(alert_id: UUID):
+    """
+    Get full alert details including context, comments, audit trail,
+    and linked event data from OpenSearch.
+    """
+    ...
+
+@router.patch("/{alert_id}/status")
+async def update_alert_status(alert_id: UUID, body: AlertStatusUpdate, current_user=Depends(get_current_user)):
+    """
+    Transition alert status. Validates allowed transitions:
+      new → investigating
+      new → false_positive
+      investigating → resolved
+      investigating → false_positive
+      resolved → investigating (reopen)
+      false_positive → investigating (reopen)
+    Creates audit log entry.
+    """
+    ALLOWED_TRANSITIONS = {
+        "new": ["investigating", "false_positive"],
+        "investigating": ["resolved", "false_positive"],
+        "resolved": ["investigating"],
+        "false_positive": ["investigating"],
+    }
+    ...
+
+@router.patch("/{alert_id}/assign")
+async def assign_alert(alert_id: UUID, body: AlertAssignment, current_user=Depends(get_current_user)):
+    """Assign alert to an analyst. Creates audit log entry."""
+    ...
+
+@router.post("/{alert_id}/comments")
+async def add_comment(alert_id: UUID, body: AlertComment, current_user=Depends(get_current_user)):
+    """Add investigation note/comment to an alert."""
+    ...
+
+@router.get("/{alert_id}/comments")
+async def list_comments(alert_id: UUID):
+    """List all comments on an alert, ordered chronologically."""
+    ...
+
+@router.get("/{alert_id}/timeline")
+async def alert_timeline(alert_id: UUID):
+    """
+    Returns a merged timeline of:
+    - Alert status changes (from audit log)
+    - Comments
+    - Related events from OpenSearch (queried by related_event_ids + time window around trigger)
+    Ordered by timestamp.
+    """
+    ...
+
+@router.get("/{alert_id}/related-events")
+async def alert_related_events(alert_id: UUID, minutes_before: int = 10, minutes_after: int = 5):
+    """
+    Queries OpenSearch for events from the same source_host
+    within a time window around the trigger event.
+    Returns events for drill-down investigation.
+    """
+    ...
+
+@router.post("/bulk-update")
+async def bulk_update_alerts(alert_ids: list[UUID], body: AlertStatusUpdate, current_user=Depends(get_current_user)):
+    """Bulk status update for multiple alerts."""
+    ...
+7.3 Events (Log Search) API
+Python
+
+# api/routes/events.py
+from fastapi import APIRouter, Query
+from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel
+
+router = APIRouter()
+
+class EventSearchParams(BaseModel):
+    query: Optional[str] = None              # Lucene/simple query string
+    source_type: Optional[list[str]] = None  # ["windows_eventlog", "syslog"]
+    category: Optional[list[str]] = None     # ["authentication", "process"]
+    action: Optional[str] = None
+    source_host: Optional[str] = None
+    user_name: Optional[str] = None
+    src_ip: Optional[str] = None
+    dst_ip: Optional[str] = None
+    dst_port: Optional[int] = None
+    process_name: Optional[str] = None
+    severity: Optional[list[str]] = None
+    time_from: datetime
+    time_to: datetime
+    sort_by: str = "timestamp"
+    sort_order: str = "desc"
+    page: int = 1
+    page_size: int = 100
+
+@router.post("/search")
+async def search_events(params: EventSearchParams):
+    """
+    Full-text and field-level search against OpenSearch.
+    Builds an OpenSearch bool query from params.
+    Returns: { items: [...], total: int, aggregations: {...} }
+    """
+    # Construct OpenSearch query
+    must_clauses = []
+    filter_clauses = [
+        {"range": {"timestamp": {"gte": params.time_from.isoformat(), "lte": params.time_to.isoformat()}}}
+    ]
+    
+    if params.query:
+        must_clauses.append({"query_string": {"query": params.query, "default_field": "process_command_line"}})
+    if params.source_type:
+        filter_clauses.append({"terms": {"source_type": params.source_type}})
+    if params.category:
+        filter_clauses.append({"terms": {"category": params.category}})
+    if params.source_host:
+        filter_clauses.append({"term": {"source_host": params.source_host}})
+    if params.user_name:
+        filter_clauses.append({"term": {"user_name": params.user_name}})
+    if params.src_ip:
+        filter_clauses.append({"term": {"src_ip": params.src_ip}})
+    if params.dst_ip:
+        filter_clauses.append({"term": {"dst_ip": params.dst_ip}})
+    if params.process_name:
+        filter_clauses.append({"wildcard": {"process_name": f"*{params.process_name}*"}})
+    
+    body = {
+        "query": {
+            "bool": {
+                "must": must_clauses,
+                "filter": filter_clauses
+            }
+        },
+        "sort": [{params.sort_by: {"order": params.sort_order}}],
+        "from": (params.page - 1) * params.page_size,
+        "size": params.page_size,
+        "aggs": {
+            "by_source_type": {"terms": {"field": "source_type", "size": 10}},
+            "by_category":    {"terms": {"field": "category", "size": 10}},
+            "by_source_host": {"terms": {"field": "source_host", "size": 20}},
+            "events_over_time": {
+                "date_histogram": {"field": "timestamp", "fixed_interval": "1h"}
+            }
+        }
+    }
+    ...
+
+@router.get("/{event_id}")
+async def get_event(event_id: str):
+    """Get a single event by ID from OpenSearch."""
+    ...
+
+@router.post("/histogram")
+async def event_histogram(params: EventSearchParams, interval: str = "1h"):
+    """
+    Returns event count over time for charting.
+    Uses the same filters as search but returns only the date_histogram aggregation.
+    """
+    ...
+
+@router.get("/context/{source_host}")
+async def host_context(source_host: str, time_from: datetime, time_to: datetime, limit: int = 500):
+    """
+    Get all events for a specific host in a time range.
+    Used for investigation drill-down: 'show me everything that happened on this machine.'
+    """
+    ...
+7.4 Detection Rules API
+Python
+
+# api/routes/rules.py
+router = APIRouter()
+
+@router.get("/")
+async def list_rules():
+    """List all detection rules with metadata (from PostgreSQL + in-memory engine state)."""
+    ...
+
+@router.get("/{rule_id}")
+async def get_rule(rule_id: str):
+    """Get full rule YAML + metadata + alert count stats."""
+    ...
+
+@router.post("/")
+async def create_rule(rule_yaml: str, current_user=Depends(require_role("admin"))):
+    """
+    Upload a new YAML rule. Validates syntax, tests against sample event,
+    saves to DB and reloads engine.
+    """
+    ...
+
+@router.put("/{rule_id}")
+async def update_rule(rule_id: str, rule_yaml: str, current_user=Depends(require_role("admin"))):
+    """Update an existing rule's YAML. Re-validates and hot-reloads engine."""
+    ...
+
+@router.patch("/{rule_id}/toggle")
+async def toggle_rule(rule_id: str, enabled: bool, current_user=Depends(require_role("admin"))):
+    """Enable or disable a rule without modifying its YAML."""
+    ...
+
+@router.delete("/{rule_id}")
+async def delete_rule(rule_id: str, current_user=Depends(require_role("admin"))):
+    """Soft-delete (disable) a rule."""
+    ...
+
+@router.post("/{rule_id}/test")
+async def test_rule(rule_id: str, sample_events: list[dict]):
+    """
+    Dry-run a rule against provided sample events.
+    Returns which events would trigger the rule — used for rule tuning.
+    """
+    ...
+
+@router.get("/{rule_id}/stats")
+async def rule_stats(rule_id: str, days: int = 30):
+    """
+    Returns alert counts per day for this rule over the given period.
+    Useful for identifying noisy rules that need tuning.
+    """
+    ...
+7.5 Dashboard API
+Python
+
+# api/routes/dashboard.py
+router = APIRouter()
+
+@router.get("/summary")
+async def dashboard_summary():
+    """
+    Returns:
+    {
+        "alerts": {
+            "total_open": 142,
+            "new": 87,
+            "investigating": 55,
+            "critical": 12,
+            "high": 34,
+            "medium": 56,
+            "low": 40,
+            "mttr_hours": 4.2     // Mean Time To Resolve (last 30 days)
+        },
+        "events": {
+            "total_24h": 1_284_000,
+            "eps": 14.8,           // Events per second (current)
+            "by_source_type": {...},
+        },
+        "top_rules_firing": [
+            {"rule_id": "DET-001", "name": "Brute Force", "count_24h": 23},
+            ...
+        ],
+        "top_targeted_hosts": [
+            {"host": "DC01", "alert_count": 15},
+            ...
+        ],
+        "mitre_heatmap": {
+            "T1110": {"name": "Brute Force", "tactic": "Credential Access", "count": 23},
+            ...
+        }
+    }
+    """
+    ...
+
+@router.get("/alerts-over-time")
+async def alerts_over_time(days: int = 7, interval: str = "1h"):
+    """Alert count histogram for chart."""
+    ...
+
+@router.get("/mitre-coverage")
+async def mitre_coverage():
+    """
+    Returns which MITRE ATT&CK techniques have active rules
+    and which have recent detections — for coverage heatmap.
+    """
+    ...
+8. WebSocket for Real-Time Updates
+Python
+
+# api/websocket.py
+from fastapi import WebSocket, WebSocketDisconnect
+import redis.asyncio as redis
+import json
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, list[WebSocket]] = {}  # channel → [ws]
+    
+    async def connect(self, websocket: WebSocket, channel: str):
+        await websocket.accept()
+        self.active_connections.setdefault(channel, []).append(websocket)
+    
+    def disconnect(self, websocket: WebSocket, channel: str):
+        self.active_connections.get(channel, []).remove(websocket)
+    
+    async def broadcast(self, channel: str, message: dict):
+        for ws in self.active_connections.get(channel, []):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
+
+# WebSocket endpoint
+@app.websocket("/ws/alerts")
+async def websocket_alerts(websocket: WebSocket):
+    await manager.connect(websocket, "alerts")
+    try:
+        # Also subscribe to Redis pub/sub for cross-process delivery
+        r = redis.from_url("redis://localhost:6379")
+        pubsub = r.pubsub()
+        await pubsub.subscribe("channel:new_alerts")
+        
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                alert_data = json.loads(message["data"])
+                await websocket.send_json({
+                    "type": "new_alert",
+                    "data": alert_data
+                })
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, "alerts")
+
+@app.websocket("/ws/events/live")
+async def websocket_live_events(websocket: WebSocket):
+    """Live event stream — shows last N events in real-time (log tailing)."""
+    await manager.connect(websocket, "events_live")
+    try:
+        r = redis.from_url("redis://localhost:6379")
+        last_id = "$"  # Only new messages
+        while True:
+            messages = await r.xread({"stream:normalized_events": last_id}, count=10, block=1000)
+            for stream, entries in messages:
+                for msg_id, data in entries:
+                    await websocket.send_json({
+                        "type": "event",
+                        "data": {k.decode(): v.decode() for k, v in data.items()}
+                    })
+                    last_id = msg_id
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, "events_live")
+9. Authentication & Authorization
+Python
+
+# auth/security.py
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+
+SECRET_KEY = "loaded-from-env-variable"  # In practice: os.environ["JWT_SECRET"]
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        role = payload.get("role")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return {"user_id": user_id, "role": role}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_role(*roles):
+    """Dependency that checks user has one of the specified roles."""
+    async def checker(current_user=Depends(get_current_user)):
+        if current_user["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return checker
+
+
+# RBAC Matrix
+# ┌──────────────┬───────────┬─────────┬────────┐
+# │ Capability   │ Admin     │ Analyst │ Viewer │
+# ├──────────────┼───────────┼─────────┼────────┤
+# │ View alerts  │ ✓         │ ✓       │ ✓      │
+# │ Update alert │ ✓         │ ✓       │ ✗      │
+# │ Assign alert │ ✓         │ ✓       │ ✗      │
+# │ Add comment  │ ✓         │ ✓       │ ✗      │
+# │ Search events│ ✓         │ ✓       │ ✓      │
+# │ Manage rules │ ✓         │ ✗       │ ✗      │
+# │ Manage users │ ✓         │ ✗       │ ✗      │
+# │ Manage assets│ ✓         │ ✓       │ ✗      │
+# │ View dashboard│ ✓        │ ✓       │ ✓      │
+# │ System config│ ✓         │ ✗       │ ✗      │
+# └──────────────┴───────────┴─────────┴────────┘
+10. Frontend Structure & UI Capabilities
+10.1 Route Map
+text
+
+/                          → Redirect to /dashboard
+/login                     → Login form
+/dashboard                 → Main dashboard
+/alerts                    → Alert queue (list + filters)
+/alerts/:id                → Alert detail + investigation view
+/events                    → Log explorer (search + results)
+/events/:id                → Single event detail
+/rules                     → Detection rule management
+/rules/:id                 → Rule detail + stats
+/rules/new                 → Rule editor (YAML)
+/mitre                     → MITRE ATT&CK coverage heatmap
+/assets                    → Asset inventory
+/settings                  → User management, system config
+10.2 Dashboard View
+text
+
+┌─────────────────────────────────────────────────────────────────┐
+│ SecOps Console                    🔔 3 new alerts    [admin ▾]  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐            │
+│  │ 🔴 12   │ │ 🟠 34   │ │ 🟡 56    │ │ 🟢 40    │            │
+│  │Critical │ │ High    │ │ Medium   │ │ Low      │            │
+│  │ alerts  │ │ alerts  │ │ alerts   │ │ alerts   │            │
+│  └─────────┘ └─────────┘ └──────────┘ └──────────┘            │
+│                                                                 │
+│  ┌──────────────────────────────────┐ ┌────────────────────────┐│
+│  │ Alerts Over Time (7d)           │ │ Top Firing Rules       ││
+│  │  ▁▂▃▅▇█▇▅▃▂▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂  │ │ 1. Brute Force (23)   ││
+│  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │ │ 2. Susp. PS (18)      ││
+│  │  Mon Tue Wed Thu Fri Sat Sun    │ │ 3. Lateral Mov (7)    ││
+│  └──────────────────────────────────┘ └────────────────────────┘│
+│                                                                 │
+│  ┌──────────────────────────────────┐ ┌────────────────────────┐│
+│  │ MITRE ATT&CK Heatmap           │ │ Events/sec: 14.8 EPS  ││
+│  │ ┌────────────────────────────┐  │ │                        ││
+│  │ │ Recon │ Init │ Exec │ ...│  │ │ Top Hosts:             ││
+│  │ │   2   │  5   │  12  │    │  │ │  DC01: 340k events     ││
+│  │ │       │      │ ████ │    │  │ │  WEB01: 280k events    ││
+│  │ └────────────────────────────┘  │ │  FW01: 190k events    ││
+│  └──────────────────────────────────┘ └────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+10.3 Alert Queue View
+text
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Alerts                                          [Export CSV]    │
+├─────────────────────────────────────────────────────────────────┤
+│ Filters:                                                        │
+│ Status: [●New] [●Investigating] [○Resolved] [○False Positive]  │
+│ Severity: [●Critical] [●High] [●Medium] [○Low]                │
+│ MITRE: [Any Technique ▾]  Host: [________]  Rule: [Any Rule ▾]│
+│ Time Range: [Last 24h ▾]        Search: [_______________] 🔍  │
+├─────────────────────────────────────────────────────────────────┤
+│ ☐ │ Sev │ Score│ Title                    │ Host   │ Status │ T│
+│───┼─────┼──────┼──────────────────────────┼────────┼────────┼──│
+│ ☐ │ 🔴  │  95  │ PsExec on DC01           │ DC01   │ New    │5m│
+│ ☐ │ 🔴  │  92  │ Brute Force: 23 fails    │ WEB01  │ New    │8m│
+│ ☐ │ 🟠  │  78  │ Susp PowerShell - admin  │ WS042  │ Invest │1h│
+│ ☐ │ 🟡  │  45  │ Service install - SVCHOST│ APP02  │ New    │2h│
+│───┴─────┴──────┴──────────────────────────┴────────┴────────┴──│
+│ Selected (2): [Assign To ▾] [Change Status ▾] [Add Tag]       │
+│                                             Page 1 of 12 [< >]│
+└─────────────────────────────────────────────────────────────────┘
+10.4 Alert Detail / Investigation View
+text
+
+┌─────────────────────────────────────────────────────────────────┐
+│ ← Back to Alerts                                               │
+│                                                                 │
+│ 🔴 PsExec-style service on DC01                   Score: 95   │
+│ Rule: DET-005 — PsExec-style Lateral Movement                  │
+│ MITRE: Lateral Movement > T1570 Lateral Tool Transfer          │
+│                                                                 │
+│ Status: [New ▾]  Assigned: [Unassigned ▾]  Created: 5 min ago │
+├─────┬───────────┬────────────────────────────────────────────────┤
+│     │ Context   │ Investigation │ Timeline │ Related Events     │
+│     ├───────────┴────────────────────────────────────────────────┤
+│     │                                                            │
+│     │  CONTEXT TAB:                                              │
+│     │  ┌─────────────────────────────────────────────────┐      │
+│     │  │ source_host:  DC01.corp.local                   │      │
+│     │  │ process_name: PSEXESVC.exe                      │      │
+│     │  │ user_name:    CORP\admin                        │      │
+│     │  │ trigger_time: 2024-01-15 08:23:41 UTC           │      │
+│     │  │ event_id:     a1b2c3d4-...                      │      │
+│     │  └─────────────────────────────────────────────────┘      │
+│     │                                                            │
+│     │  INVESTIGATION TAB:                                        │
+│     │  ┌─────────────────────────────────────────────────┐      │
+│     │  │ Quick Actions:                                   │      │
+│     │  │ [Search host DC01] [Search user admin]          │      │
+│     │  │ [Search src_ip 10.0.1.55] [View in VirusTotal] │      │
+│     │  └─────────────────────────────────────────────────┘      │
+│     │                                                            │
+│     │  Comments:                                                 │
+│     │  ┌─────────────────────────────────────────────────┐      │
+│     │  │ analyst1 (2 min ago):                           │      │
+│     │  │ Checking if this is a legitimate admin action.  │      │
+│     │  │                                                  │      │
+│     │  │ [Add comment: ________________________________] │      │
+│     │  │                                        [Submit] │      │
+│     │  └─────────────────────────────────────────────────┘      │
+│     │                                                            │
+│     │  TIMELINE TAB:                                             │
+│     │  ┌─────────────────────────────────────────────────┐      │
+│     │  │ 08:18:41 │ 🟢 login_success │ admin │ DC01     │      │
+│     │  │ 08:20:12 │ 🟢 process_create│ cmd.exe│ DC01    │      │
+│     │  │ 08:23:41 │ 🔴 service_install│ PSEXESVC│ DC01  │ ← trigger
+│     │  │ 08:23:42 │ 🟡 process_create│ psexec │ DC01    │      │
+│     │  │ 08:24:01 │ 🟢 network_conn │ DC01→WS042:445   │      │
+│     │  └─────────────────────────────────────────────────┘      │
+│     │                                                            │
+│     │  RELATED EVENTS TAB: (last 10 min on DC01)                │
+│     │  [table of events with expandable raw log view]           │
+└─────┴────────────────────────────────────────────────────────────┘
+10.5 Log Explorer View
+text
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Log Explorer                                                    │
+├─────────────────────────────────────────────────────────────────┤
+│ Time Range: [2024-01-15 00:00] to [2024-01-15 23:59]  [Apply] │
+│                                                                 │
+│ Search: [process_command_line:*powershell* AND action:process_] │
+│                                                      [Search]  │
+│                                                                 │
+│ Filters (sidebar):          Results (1,247 events):            │
+│ ┌──────────────────┐       ┌────────────────────────────────┐  │
+│ │ Source Type       │       │ [histogram chart over time]    │  │
+│ │  ☑ windows (890) │       └────────────────────────────────┘  │
+│ │  ☑ syslog (312)  │                                          │
+│ │  ☐ firewall (45) │       ┌────────────────────────────────┐  │
+│ │                   │       │ Time│Source│Action│User│Detail  │  │
+│ │ Category          │       │08:23│DC01  │proc  │admin│ps.exe │  │
+│ │  ☑ process (654) │       │08:22│DC01  │login │admin│succ   │  │
+│ │  ☑ auth (593)    │       │08:21│WEB01 │login │root │fail   │  │
+│ │  ☐ network (0)   │       │     │      │      │     │       │  │
+│ │                   │       │ [click row to expand →]         │  │
+│ │ Source Host       │       │ ┌──────────────────────────┐    │  │
+│ │  DC01 (340)       │       │ │ Full event JSON          │    │  │
+│ │  WEB01 (280)      │       │ │ + Raw log view           │    │  │
+│ │  [show more]      │       │ │ [Search this host]       │    │  │
+│ │                   │       │ │ [Search this user]       │    │  │
+│ └──────────────────┘       │ └──────────────────────────┘    │  │
+│                             └────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+11. Configuration Management
+11.1 Application Config
+YAML
+
+# config/secops.yml
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  cors_origins:
+    - "https://secops.internal.corp"
+
+database:
+  postgresql:
+    host: "${POSTGRES_HOST:localhost}"
+    port: 5432
+    database: "secops"
+    user: "${POSTGRES_USER:secops}"
+    password: "${POSTGRES_PASSWORD}"         # Always from env
+    pool_min: 5
+    pool_max: 20
+
+  opensearch:
+    hosts:
+      - "https://${OPENSEARCH_HOST:localhost}:9200"
+    user: "${OPENSEARCH_USER:admin}"
+    password: "${OPENSEARCH_PASSWORD}"
+    index_prefix: "secops-events"
+    retention_days: 90
+    shards: 2
+    replicas: 1
+
+  redis:
+    url: "redis://${REDIS_HOST:localhost}:6379/0"
+
+ingestion:
+  syslog:
+    enabled: true
+    udp_port: 1514
+    tcp_port: 1514
+  pipeline_workers: 4
+  batch_size: 50
+  dead_letter_ttl_hours: 72
+
+detection:
+  rules_directory: "/etc/secops/rules"
+  rule_reload_interval_seconds: 60     # Hot-reload rules from disk/DB
+  max_alerts_per_rule_per_hour: 100    # Rate-limiting to prevent alert storms
+
+enrichment:
+  geoip:
+    enabled: true
+    database_path: "/var/lib/GeoIP/GeoLite2-City.mmdb"
+  home_country: "US"                   # Used for severity scoring
+
+auth:
+  jwt_secret: "${JWT_SECRET}"
+  token_expire_minutes: 480
+  bcrypt_rounds: 12
+
+alerting:
+  dedup_window_minutes: 15             # Suppress duplicate alerts within this window
+  severity_score:
+    base:
+      critical: 90
+      high: 70
+      medium: 45
+      low: 20
+    boosts:
+      critical_asset: 15
+      medium_asset: 5
+      privileged_user: 10
+      external_source: 5
+11.2 Environment Variables (.env)
+Bash
+
+POSTGRES_HOST=localhost
+POSTGRES_USER=secops
+POSTGRES_PASSWORD=<generated-secret>
+OPENSEARCH_HOST=localhost
+OPENSEARCH_USER=admin
+OPENSEARCH_PASSWORD=<generated-secret>
+REDIS_HOST=localhost
+JWT_SECRET=<generated-64-char-hex>
+GEOIP_LICENSE_KEY=<maxmind-key>
+12. Deployment
+12.1 Docker Compose (Production-Ready)
+YAML
+
+# docker-compose.yml
+version: "3.9"
+
+services:
+  # ─── Core Application ───
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      uvicorn api.main:app 
+      --host 0.0.0.0 --port 8000 
+      --workers 4 
+      --log-level info
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./config:/etc/secops
+      - ./rules:/etc/secops/rules
+      - geoip-data:/var/lib/GeoIP
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m ingestion.pipeline
+    env_file: .env
+    volumes:
+      - ./config:/etc/secops
+      - ./rules:/etc/secops/rules
+      - geoip-data:/var/lib/GeoIP
+    depends_on:
+      - api
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  syslog-receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m ingestion.receivers.syslog_server
+    ports:
+      - "1514:1514/udp"
+      - "1514:1514/tcp"
+    env_file: .env
+    depends_on:
+      - redis
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      celery -A tasks.celery_app worker 
+      --loglevel=info 
+      --concurrency=2
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      celery -A tasks.celery_app beat 
+      --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "https://secops.internal.corp/api"
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  # ─── Infrastructure ───
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: secops
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true    # For dev; enable in production
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}
+    volumes:
+      - os-data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\\|yellow\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ─── Reverse Proxy ───
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+      - frontend
+
+volumes:
+  pg-data:
+  os-data:
+  redis-data:
+  geoip-data:
+12.2 Dockerfile
+Dockerfile
+
+# Dockerfile
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Application code
+COPY . .
+
+# Non-root user
+RUN useradd -m -r secops && chown -R secops:secops /app
+USER secops
+
+EXPOSE 8000
+12.3 Nginx Config
+nginx
+
+# nginx/nginx.conf
+upstream api_backend {
+    server api:8000;
+}
+
+upstream frontend {
+    server frontend:80;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name secops.internal.corp;
+
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # API
+    location /api/ {
+        proxy_pass http://api_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Rate limiting for ingestion endpoints
+        limit_req zone=ingest burst=100 nodelay;
+    }
+
+    # WebSocket
+    location /ws/ {
+        proxy_pass http://api_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;
+    }
+
+    # Frontend
+    location / {
+        proxy_pass http://frontend;
+    }
+}
+
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=ingest:10m rate=50r/s;
+13. Scheduled Tasks (Celery Beat)
+Python
+
+# tasks/celery_app.py
+from celery import Celery
+from celery.schedules import crontab
+
+app = Celery("secops", broker="redis://localhost:6379/1")
+
+app.conf.beat_schedule = {
+    # Reload detection rules from disk/DB every 60 seconds (hot reload)
+    "reload-detection-rules": {
+        "task": "tasks.detection.reload_rules",
+        "schedule": 60.0,
+    },
+    
+    # Clean up old OpenSearch indices beyond retention period
+    "cleanup-old-indices": {
+        "task": "tasks.maintenance.cleanup_indices",
+        "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
+    
+    # Refresh asset DB cache for enrichment
+    "refresh-asset-cache": {
+        "task": "tasks.enrichment.refresh_assets",
+        "schedule": 300.0,  # Every 5 minutes
+    },
+    
+    # Compute dashboard statistics and cache them
+    "compute-dashboard-stats": {
+        "task": "tasks.dashboard.compute_stats",
+        "schedule": 60.0,
+    },
+    
+    # Prune threshold engine state (remove expired bucket entries)
+    "prune-threshold-state": {
+        "task": "tasks.detection.prune_threshold_state",
+        "schedule": 300.0,
+    },
+    
+    # Dead letter queue report
+    "dlq-report": {
+        "task": "tasks.maintenance.dlq_report",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    
+    # GeoIP database update (weekly)
+    "update-geoip": {
+        "task": "tasks.maintenance.update_geoip",
+        "schedule": crontab(day_of_week=0, hour=3),
+    },
+}
+
+# tasks/maintenance.py
+@app.task
+def cleanup_indices():
+    """Delete OpenSearch indices older than configured retention_days."""
+    from datetime import datetime, timedelta
+    retention = 90  # from config
+    cutoff = datetime.utcnow() - timedelta(days=retention)
+    
+    # List indices matching pattern, delete those with dates before cutoff
+    indices = os_client.cat.indices(index="secops-events-*", format="json")
+    for idx in indices:
+        idx_name = idx["index"]
+        # Extract date from index name: secops-events-2024.01.15
+        date_str = idx_name.replace("secops-events-", "").replace(".", "-")
+        try:
+            idx_date = datetime.strptime(date_str, "%Y-%m-%d")
+            if idx_date < cutoff:
+                os_client.indices.delete(index=idx_name)
+        except ValueError:
+            continue
+14. Security Hardening
+Concern	Implementation
+Transport encryption	TLS termination at Nginx; internal services on private Docker network
+Secrets management	All secrets via environment variables; never in config files or code
+Authentication	JWT with bcrypt-hashed passwords; tokens expire after 8 hours
+Authorization	RBAC enforced at API layer via dependency injection
+Input validation	Pydantic models on all endpoints; OpenSearch query parameterized to prevent injection
+Rate limiting	Nginx limit_req on ingestion endpoints; per-rule alert rate caps in detection engine
+Audit logging	All alert mutations logged to alert_audit_log with user ID and timestamp
+Network isolation	Docker internal network; only Nginx, syslog receiver, and API exposed
+Non-root containers	All application containers run as non-root user
+Dependency scanning	pip-audit in CI; safety check on every build
+CORS	Restricted to configured origins only
+Content Security Policy	Set via Nginx headers on frontend responses
+Database access	Connection pooling with minimum-privilege database user per service
+Log sanitization	PII fields (user_name) excluded from application debug logs
+15. Data Flow Summary (End-to-End)
+text
+
+1. LOG SOURCE generates a log entry
+          │
+          ▼
+2. RECEIVER accepts it (REST API batch, syslog UDP/TCP, file watcher)
+   → Pushes raw bytes + metadata to Redis Stream "stream:raw_logs"
+          │
+          ▼
+3. PIPELINE WORKER reads from Redis Stream (consumer group, at-least-once)
+   → PARSER (selected by source_type) converts raw text → NormalizedEvent
+   → If parse fails → push to "stream:dead_letter", ACK, continue
+          │
+          ▼
+4. ENRICHMENT adds GeoIP, asset criticality, tags
+          │
+          ▼
+5. STORAGE: NormalizedEvent indexed into OpenSearch (daily index)
+          │
+          ▼
+6. DETECTION ENGINE evaluates all enabled rules against the event
+   → Simple rules: immediate match → Alert
+   → Threshold rules: increment counter, check if threshold met → Alert
+   → Filters applied to suppress known benign patterns
+          │
+          ▼
+7. ALERT CREATION
+   → Dedup check: compute dedup_key = hash(rule_id + grouping_fields)
+   → If duplicate exists within dedup_window → increment count, skip
+   → Otherwise → INSERT into PostgreSQL alerts table
+   → Severity score computed (base + asset + user + geo boosts)
+          │
+          ▼
+8. NOTIFICATION
+   → PUBLISH alert JSON to Redis pub/sub "channel:new_alerts"
+   → WebSocket subscribers in browser receive real-time toast notification
+          │
+          ▼
+9. ANALYST WORKFLOW
+   → Views alert in queue → clicks to open detail
+   → Reviews context fields, trigger event, timeline
+   → Uses "Related Events" tab to query OpenSearch for surrounding activity
+   → Adds comments, changes status (New → Investigating → Resolved)
+   → All state changes logged to alert_audit_log
+          │
+          ▼
+10. METRICS & REPORTING
+    → Dashboard stats computed periodically by Celery Beat
+    → MITRE coverage heatmap shows detection gaps
+    → Rule stats identify noisy rules for tuning
+16. OpenSearch Index Lifecycle
+JSON
+
+{
+  "policy": {
+    "description": "SecOps event retention policy",
+    "default_state": "hot",
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          { "rollover": { "min_index_age": "1d" } }
+        ],
+        "transitions": [
+          { "state_name": "warm", "conditions": { "min_index_age": "7d" } }
+        ]
+      },
+      {
+        "name": "warm",
+        "actions": [
+          { "replica_count": { "number_of_replicas": 0 } },
+          { "force_merge": { "max_num_segments": 1 } }
+        ],
+        "transitions": [
+          { "state_name": "delete", "conditions": { "min_index_age": "90d" } }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [
+          { "delete": {} }
+        ]
+      }
+    ]
+  }
+}
+17. Project File Structure
+text
+
+secops-console/
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── .env.example
+├── README.md
+│
+├── config/
+│   └── secops.yml                    # Main application config
+│
+├── rules/                            # Detection rule YAML files
+│   ├── brute_force_login.yml
+│   ├── suspicious_powershell.yml
+│   ├── lateral_movement_psexec.yml
+│   ├── impossible_travel.yml
+│   └── ...
+│
+├── migrations/                       # PostgreSQL DDL
+│   ├── 001_initial.sql
+│   └── 002_add_assets.sql
+│
+├── nginx/
+│   ├── nginx.conf
+│   └── certs/
+│
+├── api/                              # FastAPI application
+│   ├── main.py                       # App factory, middleware, startup
+│   ├── dependencies.py               # DB pools, shared deps
+│   ├── websocket.py
+│   ├── routes/
+│   │   ├── alerts.py
+│   │   ├── events.py
+│   │   ├── rules.py
+│   │   ├── dashboard.py
+│   │   ├── users.py
+│   │   └── assets.py
+│   └── middleware/
+│       ├── auth.py
+│       └── logging.py
+│
+├── auth/
+│   └── security.py                   # JWT, password hashing, RBAC
+│
+├── schemas/
+│   └── normalized_event.py           # Pydantic event schema
+│
+├── ingestion/
+│   ├── pipeline.py                   # Main pipeline worker loop
+│   ├── enrichment.py                 # GeoIP, asset enrichment
+│   ├── receivers/
+│   │   ├── rest_receiver.py
+│   │   ├── syslog_receiver.py
+│   │   └── file_watcher.py
+│   └── parsers/
+│       ├── base.py
+│       ├── windows_eventlog.py
+│       ├── syslog_parser.py
+│       ├── firewall_parser.py
+│       └── auth_log_parser.py
+│
+├── detection/
+│   ├── engine.py                     # Rule evaluation engine
+│   ├── rule_model.py                 # Rule Pydantic model
+│   └── alert_model.py               # Alert Pydantic model
+│
+├── storage/
+│   ├── opensearch_client.py          # Index, search, aggregate
+│   └── postgres_client.py           # Alert CRUD, audit log
+│
+├── tasks/                            # Celery tasks
+│   ├── celery_app.py
+│   ├── detection.py
+│   ├── maintenance.py
+│   ├── dashboard.py
+│   └── enrichment.py
+│
+├── frontend/                         # React application
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── api/                      # API client (axios/fetch wrappers)
+│   │   ├── components/
+│   │   │   ├── AlertQueue/
+│   │   │   ├── AlertDetail/
+│   │   │   ├── Dashboard/
+│   │   │   ├── LogExplorer/
+│   │   │   ├── RuleEditor/
+│   │   │   ├── MitreHeatmap/
+│   │   │   └── common/
+│   │   ├── hooks/
+│   │   │   ├── useAlerts.ts
+│   │   │   ├── useEvents.ts
+│   │   │   └── useWebSocket.ts
+│   │   ├── pages/
+│   │   ├── store/                    # Zustand or Redux
+│   │   └── types/
+│   └── public/
+│
+└── tests/
+    ├── test_parsers/
+    ├── test_detection_engine/
+    ├── test_api/
+    └── fixtures/
+        ├── sample_windows_events.xml
+        ├── sample_syslog.txt
+        └── sample_firewall.log

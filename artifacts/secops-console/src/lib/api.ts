@@ -154,12 +154,16 @@ export const alertsApi = {
   list: (params?: Record<string, string | number>) =>
     apiClient.get<{ alerts: any[]; total: number; page: number; limit: number }>("/alerts", { params }),
   getById: (id: string) => apiClient.get<{ alert: any }>(`/alerts/${id}`),
-  updateStatus: (id: string, status: AlertStatus) =>
-    apiClient.patch<{ alert: any }>(`/alerts/${id}/status`, { status }),
+  updateStatus: (id: string, status: AlertStatus, resolutionNotes?: string) =>
+    apiClient.patch<{ alert: any }>(`/alerts/${id}/status`, { status, resolutionNotes }),
   assign: (id: string, assignedTo: string) =>
     apiClient.patch<{ alert: any }>(`/alerts/${id}/assign`, { assignedTo }),
   addNote: (id: string, content: string, type?: string) =>
     apiClient.post<{ entry: any }>(`/alerts/${id}/timeline`, { content, type }),
+  bulkUpdate: (ids: string[], status: AlertStatus, resolutionNotes?: string) =>
+    apiClient.post<{ updated: number }>("/alerts/bulk-update", { ids, status, resolutionNotes }),
+  relatedEvents: (id: string, minutesBefore = 10, minutesAfter = 5) =>
+    apiClient.get<{ events: any[]; total: number }>(`/alerts/${id}/related-events`, { params: { minutesBefore, minutesAfter } }),
 };
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
@@ -197,6 +201,26 @@ export const ingestApi = {
 
   bulk: (logs: Record<string, unknown>[]) =>
     apiClient.post<{ inserted: number }>("/ingest/bulk", { logs }),
+};
+
+// ─── Assets ──────────────────────────────────────────────────────────────────
+
+export const assetsApi = {
+  list: (params?: Record<string, string | number>) =>
+    apiClient.get<{ assets: any[]; total: number; page: number; limit: number }>("/assets", { params }),
+  getById: (id: string) => apiClient.get<{ asset: any }>(`/assets/${id}`),
+  create: (data: {
+    hostname: string;
+    ip?: string;
+    os?: string;
+    criticality?: string;
+    tags?: string[];
+    owner?: string;
+    department?: string;
+    description?: string;
+  }) => apiClient.post<{ asset: any }>("/assets", data),
+  update: (id: string, data: Record<string, any>) => apiClient.put<{ asset: any }>(`/assets/${id}`, data),
+  delete: (id: string) => apiClient.delete(`/assets/${id}`),
 };
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────

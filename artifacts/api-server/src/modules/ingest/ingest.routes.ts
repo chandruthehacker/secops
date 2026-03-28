@@ -4,6 +4,7 @@ import { can } from "../../middlewares/rbac.middleware";
 import { db, rawLogsTable, alertsTable } from "@workspace/db";
 import { eq, desc, ilike, and, sql } from "drizzle-orm";
 import { logAuditEvent } from "../../lib/audit";
+import { processLogRecord, processLogsBatch } from "../../lib/detection/pipeline";
 import type { Request, Response } from "express";
 
 const router = Router();
@@ -31,11 +32,11 @@ router.post("/ingest-log", requireAuth, can("ingest:write"), async (req: Request
 
   await logAuditEvent(req, "ingest.log", { resource: "ingest", resourceId: log.id, metadata: { source, severity } });
 
-  res.status(201).json({
-    message: "Log ingested successfully",
-    logId: log.id,
-    note: "Connect your detection engine to process this log. Poll GET /api/ingest/pending for unprocessed logs.",
-  });
+  // Run detection asynchronously
+  const rawMsg = message ?? JSON.stringify(rawData ?? {});
+  processLogRecord(log.id, rawMsg, source, hostname ?? sourceIp ?? "unknown", { srcIp: sourceIp, userName: username }).catch(() => {});
+
+  res.status(201).json({ message: "Log ingested successfully", logId: log.id });
 });
 
 router.get("/ingest/pending", requireAuth, can("ingest:pending"), async (req: Request, res: Response) => {
@@ -104,18 +105,22 @@ router.post("/ingest/bulk", requireAuth, can("ingest:write"), async (req: Reques
     processed: "false" as const,
   }));
 
-  const inserted = await db.insert(rawLogsTable).values(values).returning({ id: rawLogsTable.id });
+  const inserted = await db.insert(rawLogsTable).values(values).returning({ id: rawLogsTable.id, message: rawLogsTable.message, source: rawLogsTable.source, hostname: rawLogsTable.hostname, sourceIp: rawLogsTable.sourceIp, username: rawLogsTable.username });
+
   await logAuditEvent(req, "ingest.bulk", {
     resource: "ingest",
     resourceId: inserted[0]?.id,
     metadata: { count: inserted.length },
   });
 
+  // Run detection asynchronously on all inserted logs
+  processLogsBatch(inserted.map(l => ({ id: l.id, message: l.message ?? "", source: l.source, hostname: l.hostname ?? undefined, sourceIp: l.sourceIp ?? undefined, username: l.username ?? undefined }))).catch(() => {});
+
   res.status(201).json({ inserted: inserted.length });
 });
 
 router.get("/logs", requireAuth, can("alerts:view"), async (req: Request, res: Response) => {
-  const { source, severity, search, page = "1", limit = "50" } = req.query as Record<string, string>;
+  const { source, severity, search, category, action, page = "1", limit = "50" } = req.query as Record<string, string>;
   const pageNum = Math.max(1, Number(page));
   const limitNum = Math.min(200, Math.max(1, Number(limit)));
   const offset = (pageNum - 1) * limitNum;
@@ -123,9 +128,11 @@ router.get("/logs", requireAuth, can("alerts:view"), async (req: Request, res: R
   const conditions = [];
   if (source) conditions.push(eq(rawLogsTable.source, source));
   if (severity) conditions.push(eq(rawLogsTable.severity, severity));
+  if (category) conditions.push(eq(rawLogsTable.category as any, category));
+  if (action) conditions.push(eq(rawLogsTable.action as any, action));
   if (search) {
     conditions.push(
-      sql`(${rawLogsTable.message} ilike ${"%" + search + "%"} or ${rawLogsTable.sourceIp} ilike ${"%" + search + "%"} or ${rawLogsTable.eventType} ilike ${"%" + search + "%"})`
+      sql`(${rawLogsTable.message} ilike ${"%" + search + "%"} or ${rawLogsTable.sourceIp} ilike ${"%" + search + "%"} or ${rawLogsTable.eventType} ilike ${"%" + search + "%"} or ${rawLogsTable.username} ilike ${"%" + search + "%"})`
     );
   }
 

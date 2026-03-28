@@ -8,6 +8,7 @@ import rulesRoutes from "../modules/rules/rules.routes";
 import auditRoutes from "../modules/audit/audit.routes";
 import ingestRoutes from "../modules/ingest/ingest.routes";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes";
+import assetsRoutes from "../modules/assets/assets.routes";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(rulesRoutes);
 router.use(auditRoutes);
 router.use(ingestRoutes);
 router.use(dashboardRoutes);
+router.use(assetsRoutes);
 
 export default router;

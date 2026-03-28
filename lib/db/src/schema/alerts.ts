@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, timestamp, pgEnum, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, timestamp, pgEnum, jsonb, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -12,16 +12,28 @@ export const alertsTable = pgTable("alerts", {
   title: text("title").notNull(),
   description: text("description"),
   severity: alertSeverityEnum("severity").notNull(),
+  severityScore: integer("severity_score").notNull().default(50),
   status: alertStatusEnum("status").notNull().default("new"),
   source: text("source"),
   ruleId: text("rule_id"),
   ruleName: text("rule_name"),
   mitreIds: text("mitre_ids").array(),
   mitreTactic: text("mitre_tactic"),
+  mitreTechniqueId: text("mitre_technique_id"),
+  mitreTechniqueName: text("mitre_technique_name"),
+  mitreSubtechniqueId: text("mitre_subtechnique_id"),
   sourceIp: text("source_ip"),
   destIp: text("dest_ip"),
   hostname: text("hostname"),
+  sourceHost: text("source_host"),
+  triggerEventId: text("trigger_event_id"),
+  triggerTimestamp: timestamp("trigger_timestamp"),
+  context: jsonb("context").default({}),
+  tags: text("tags").array().default([]),
+  relatedEventIds: text("related_event_ids").array().default([]),
   rawLog: jsonb("raw_log"),
+  dedupKey: text("dedup_key").unique(),
+  resolutionNotes: text("resolution_notes"),
   createdBy: uuid("created_by").references(() => usersTable.id),
   assignedTo: uuid("assigned_to").references(() => usersTable.id),
   updatedBy: uuid("updated_by").references(() => usersTable.id),

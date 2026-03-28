@@ -5,3 +5,4 @@ export * from "./incidents";
 export * from "./audit-logs";
 export * from "./logs";
 export * from "./api-keys";
+export * from "./assets";
