@@ -24,16 +24,25 @@ import NotFound from "@/pages/not-found";
 const queryClient = new QueryClient();
 
 function ProtectedRoute({ component: Component, permission }: { component: React.ComponentType; permission?: Permission }) {
-  const { isAuthenticated, can } = useAuthStore();
+  const { isAuthenticated, isInitialized, can } = useAuthStore();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (isInitialized && !isAuthenticated) {
       setLocation("/login");
     }
-  }, [isAuthenticated, setLocation]);
+  }, [isAuthenticated, isInitialized, setLocation]);
+
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) return null;
+
   if (permission && !can(permission)) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground flex-col gap-2">
@@ -47,7 +56,12 @@ function ProtectedRoute({ component: Component, permission }: { component: React
 
 function AuthInit({ children }: { children: React.ReactNode }) {
   const restoreSession = useAuthStore((s) => s.restoreSession);
-  useEffect(() => { restoreSession(); }, [restoreSession]);
+  const isInitialized = useAuthStore((s) => s.isInitialized);
+  useEffect(() => {
+    if (!isInitialized) {
+      restoreSession();
+    }
+  }, [restoreSession, isInitialized]);
   return <>{children}</>;
 }
 

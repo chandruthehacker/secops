@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middlewares/auth.middleware";
 import { can } from "../../middlewares/rbac.middleware";
 import { db, rawLogsTable, alertsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, desc, ilike, and, sql } from "drizzle-orm";
 import { logAuditEvent } from "../../lib/audit";
 import type { Request, Response } from "express";
 
@@ -76,6 +76,31 @@ router.post("/ingest/detections", requireAuth, can("ingest:write"), async (req: 
   }
 
   res.status(201).json({ created: created.length, alerts: created });
+});
+
+router.get("/logs", requireAuth, can("alerts:view"), async (req: Request, res: Response) => {
+  const { source, severity, search, page = "1", limit = "50" } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, Number(page));
+  const limitNum = Math.min(200, Math.max(1, Number(limit)));
+  const offset = (pageNum - 1) * limitNum;
+
+  const conditions = [];
+  if (source) conditions.push(eq(rawLogsTable.source, source));
+  if (severity) conditions.push(eq(rawLogsTable.severity, severity));
+  if (search) {
+    conditions.push(
+      sql`(${rawLogsTable.message} ilike ${"%" + search + "%"} or ${rawLogsTable.sourceIp} ilike ${"%" + search + "%"} or ${rawLogsTable.eventType} ilike ${"%" + search + "%"})`
+    );
+  }
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [logs, [{ count }]] = await Promise.all([
+    db.select().from(rawLogsTable).where(where).orderBy(desc(rawLogsTable.createdAt)).limit(limitNum).offset(offset),
+    db.select({ count: sql<number>`count(*)` }).from(rawLogsTable).where(where),
+  ]);
+
+  res.json({ logs, total: Number(count), page: pageNum, limit: limitNum });
 });
 
 export default router;

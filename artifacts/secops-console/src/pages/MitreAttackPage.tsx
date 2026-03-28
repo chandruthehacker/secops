@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useAppStore } from '@/store';
+import { useQuery } from '@tanstack/react-query';
+import { alertsApi, rulesApi, normalizeRule } from '@/lib/api';
 import { Target, ShieldCheck, X, AlertTriangle } from 'lucide-react';
-import { MitreTechnique } from '@/lib/types';
+import type { MitreTactic, MitreTechnique } from '@/lib/types';
+import { mockMitreMatrix } from '@/lib/mockGenerator';
 
 function TechniquePopup({ technique, tacticName, onClose }: { technique: MitreTechnique; tacticName: string; onClose: () => void }) {
   return (
@@ -69,9 +71,52 @@ function TechniquePopup({ technique, tacticName, onClose }: { technique: MitreTe
 }
 
 export default function MitreAttackPage() {
-  const { mitre } = useAppStore();
   const [selectedTechnique, setSelectedTechnique] = useState<{ technique: MitreTechnique; tacticName: string } | null>(null);
   const [showCoveredOnly, setShowCoveredOnly] = useState(false);
+
+  // Fetch real data to overlay onto the static MITRE matrix
+  const { data: alertsData } = useQuery({
+    queryKey: ['alerts', { limit: '500' }],
+    queryFn: () => alertsApi.list({ limit: 500 }).then(r => r.data.alerts),
+  });
+
+  const { data: rulesData } = useQuery({
+    queryKey: ['rules'],
+    queryFn: () => rulesApi.list().then(r => r.data.rules.map(normalizeRule)),
+  });
+
+  // Compute dynamic coverage from real data, fall back to static matrix
+  const mitre = useMemo((): MitreTactic[] => {
+    // Build sets of MITRE IDs from real data
+    const coveredByRules = new Set<string>();
+    const alertsByMitre: Record<string, number> = {};
+
+    (rulesData ?? []).forEach(r => {
+      r.mitreIds.forEach(id => coveredByRules.add(id.split('.')[0]));
+    });
+
+    (alertsData ?? []).forEach((a: any) => {
+      (a.mitreIds ?? []).forEach((id: string) => {
+        const baseId = id.split('.')[0];
+        alertsByMitre[baseId] = (alertsByMitre[baseId] ?? 0) + 1;
+      });
+    });
+
+    const hasRealData = coveredByRules.size > 0 || Object.keys(alertsByMitre).length > 0;
+
+    return mockMitreMatrix.map(tactic => ({
+      ...tactic,
+      techniques: tactic.techniques.map(tech => {
+        if (!hasRealData) return tech;
+        const baseId = tech.id.split('.')[0];
+        return {
+          ...tech,
+          covered: coveredByRules.has(baseId) || tech.covered,
+          alertCount: alertsByMitre[baseId] ?? tech.alertCount,
+        };
+      }),
+    }));
+  }, [alertsData, rulesData]);
 
   const totalTechniques = mitre.reduce((acc, tactic) => acc + tactic.techniques.length, 0);
   const coveredTechniques = mitre.reduce((acc, tactic) => acc + tactic.techniques.filter(t => t.covered).length, 0);
@@ -134,7 +179,7 @@ export default function MitreAttackPage() {
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-6 text-xs text-muted-foreground">
+        <div className="flex items-center gap-6 text-xs text-muted-foreground flex-wrap">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 bg-primary/15 border border-primary/40 rounded-sm" />
             <span>Covered by rule</span>
@@ -157,7 +202,6 @@ export default function MitreAttackPage() {
           <div className="inline-flex gap-2 min-w-full pb-2">
             {filteredMatrix.map(tactic => (
               <div key={tactic.id} className="flex-1 min-w-[180px] max-w-[220px] flex flex-col gap-1.5">
-                {/* Tactic Header */}
                 <div className="bg-secondary/60 border border-border p-2.5 rounded-lg text-center">
                   <div className="font-bold text-foreground text-xs mb-0.5 leading-tight">{tactic.name}</div>
                   <div className="font-mono text-[10px] text-muted-foreground">{tactic.id}</div>
@@ -166,7 +210,6 @@ export default function MitreAttackPage() {
                   </div>
                 </div>
 
-                {/* Techniques */}
                 {tactic.techniques.map(tech => (
                   <button
                     key={tech.id}

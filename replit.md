@@ -58,13 +58,14 @@ artifacts-monorepo/
 - **Audit Logs** (admin only) — paginated log of all system actions
 
 ### Key Files
-- `src/App.tsx` — Router with `ProtectedRoute` auth guards + role checks
+- `src/App.tsx` — Router with `ProtectedRoute` auth guards + role checks; uses `isInitialized` to prevent race conditions on login redirect
 - `src/components/layout/MainLayout.tsx` — Sidebar (role-gated nav) + header with real user
-- `src/lib/api.ts` — Axios client with JWT interceptor + token refresh
-- `src/store/authStore.ts` — Zustand auth store (login, logout, restoreSession, hasRole)
-- `src/lib/mockGenerator.ts` — Generates 250 logs and 65 alerts for mock pages
-- `src/store/index.ts` — Zustand state (alerts, logs, rules)
-- `src/pages/LoginPage.tsx` — Login form with demo credential quick-fill
+- `src/lib/api.ts` — Axios client with JWT interceptor + token refresh; all API modules (meApi, dashboardApi, logsApi, alertsApi, rulesApi) with DB normalizers
+- `src/store/authStore.ts` — Zustand auth store with `isInitialized` flag (login, logout, restoreSession, hasRole, can)
+- `src/pages/LoginPage.tsx` — Login form with demo credential quick-fill buttons
+- `src/pages/DashboardPage.tsx` — Real API stats via /dashboard/stats
+- `src/pages/AlertQueuePage.tsx` — Real alerts via TanStack Query
+- `src/pages/SettingsPage.tsx` — Profile, notifications, API keys via /me endpoints
 - `src/pages/UserManagementPage.tsx` — Admin user CRUD
 - `src/pages/AuditLogPage.tsx` — Paginated audit trail
 - `vite.config.ts` — Proxy `/api` → API server at port 8080
@@ -86,16 +87,19 @@ artifacts-monorepo/
 
 ```
 src/
+├── app.ts             — Express app; trust proxy enabled for rate-limit X-Forwarded-For
 ├── modules/
 │   ├── auth/          — login, refresh, logout, /me
+│   ├── me/            — GET/PATCH /me, POST /me/password, /me/settings, /me/api-keys
+│   ├── dashboard/     — GET /dashboard/stats (alert counts, trend data)
 │   ├── users/         — CRUD + password reset (admin only)
 │   ├── alerts/        — list, get, status update, assign, timeline notes
 │   ├── rules/         — CRUD + enable/disable (admin/soc_l2)
 │   ├── audit/         — paginated audit log read (admin only)
-│   └── ingest/        — POST /ingest-log, GET /ingest/pending, POST /ingest/detections
+│   └── ingest/        — POST /ingest-log, GET /logs, GET /ingest/pending, POST /ingest/detections
 ├── middlewares/
-│   ├── auth.middleware.ts  — JWT Bearer token validation
-│   └── rbac.middleware.ts  — requireRole(), requireMinRole()
+│   ├── auth.middleware.ts  — JWT Bearer token validation (export: requireAuth)
+│   └── rbac.middleware.ts  — can() permission check
 └── lib/
     ├── jwt.ts         — signAccessToken, signRefreshToken, verify*
     └── audit.ts       — logAuditEvent() helper
@@ -139,10 +143,14 @@ Tables: `users`, `alerts`, `alert_timeline`, `rules`, `incidents`, `audit_logs`,
 | Username | Role | Password |
 |----------|------|----------|
 | admin | Admin | Admin@SecOps1! |
+| morgan | SOC Manager | Manager@1234! |
+| elena | Detection Engineer | Engineer@1234! |
 | alice | SOC L2 | Analyst@1234! |
-| bob | SOC L1 | Analyst@1234! |
 | diana | SOC L2 | Analyst@1234! |
+| bob | SOC L1 | Analyst@1234! |
 | viewer | Viewer | Viewer@1234! |
+
+> **Note**: All demo users must have `status = 'active'` in the DB. If any are inactive after seeding, run: `UPDATE users SET status = 'active' WHERE status = 'inactive';`
 
 ## Detection Engine Integration (Phase 3 Ready)
 

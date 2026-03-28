@@ -1,20 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useAppStore } from '@/store';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { rulesApi, normalizeRule } from '@/lib/api';
 import { useAuthStore } from '@/store/authStore';
 import { format } from 'date-fns';
 import { SeverityBadge } from '@/components/ui/Badge';
-import { Shield, Plus, Search, Power, PowerOff, Code, Trash2, X, Copy, CheckCheck, Lock } from 'lucide-react';
-import { Link, useLocation } from 'wouter';
-import { DetectionRule } from '@/lib/types';
+import { Shield, Plus, Search, Power, PowerOff, Code, Trash2, X, Copy, CheckCheck, Lock, Loader2 } from 'lucide-react';
+import { useLocation } from 'wouter';
+import type { DetectionRule } from '@/lib/types';
 
 function YamlModal({ rule, onClose }: { rule: DetectionRule; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
-    navigator.clipboard.writeText(rule.yaml).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard.writeText(rule.yaml).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -29,17 +27,15 @@ function YamlModal({ rule, onClose }: { rule: DetectionRule; onClose: () => void
               {copied ? <CheckCheck className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               {copied ? 'Copied!' : 'Copy'}
             </button>
-            <button onClick={onClose} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors">
-              <X className="w-5 h-5" />
-            </button>
+            <button onClick={onClose} className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"><X className="w-5 h-5" /></button>
           </div>
         </div>
         <div className="flex-1 overflow-auto bg-[#050810] p-4">
-          <pre className="text-sm font-mono text-green-400 whitespace-pre-wrap">{rule.yaml}</pre>
+          <pre className="text-sm font-mono text-green-400 whitespace-pre-wrap">{rule.yaml || '# No YAML content available for this rule.'}</pre>
         </div>
         <div className="p-3 border-t border-border bg-secondary/20 flex justify-between items-center text-xs text-muted-foreground">
           <span>Author: {rule.author} · Modified: {format(rule.updatedAt, 'MMM dd, yyyy')}</span>
-          <span className="font-mono">{rule.yaml.split('\n').length} lines</span>
+          <span className="font-mono">{(rule.yaml || '').split('\n').length} lines</span>
         </div>
       </div>
     </div>
@@ -47,7 +43,7 @@ function YamlModal({ rule, onClose }: { rule: DetectionRule; onClose: () => void
 }
 
 export default function DetectionRulesPage() {
-  const { rules, toggleRule, deleteRule } = useAppStore();
+  const qc = useQueryClient();
   const { can } = useAuthStore();
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState('');
@@ -59,38 +55,58 @@ export default function DetectionRulesPage() {
   const canDelete = can('rules:delete');
   const canToggle = can('rules:toggle');
 
-  const filteredRules = rules.filter(r => {
+  const { data, isLoading } = useQuery({
+    queryKey: ['rules'],
+    queryFn: () => rulesApi.list().then(r => r.data.rules.map(normalizeRule)),
+  });
+
+  const rules = data ?? [];
+
+  const filteredRules = useMemo(() => rules.filter(r => {
     const matchSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.mitreIds.some(id => id.includes(searchTerm));
     const matchStatus = statusFilter === 'all' || (statusFilter === 'enabled' ? r.enabled : !r.enabled);
     return matchSearch && matchStatus;
+  }), [rules, searchTerm, statusFilter]);
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => rulesApi.toggle(id, !enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rules'] }),
   });
 
-  const handleDelete = (id: string) => {
-    deleteRule(id);
-    setConfirmDeleteId(null);
-  };
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => rulesApi.delete(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rules'] });
+      setConfirmDeleteId(null);
+    },
+  });
+
+  const ruleToDelete = rules.find(r => r.id === confirmDeleteId);
 
   return (
     <MainLayout>
       {viewYamlFor && <YamlModal rule={viewYamlFor} onClose={() => setViewYamlFor(null)} />}
 
-      {/* Delete confirm dialog */}
-      {confirmDeleteId && canDelete && (() => {
-        const rule = rules.find(r => r.id === confirmDeleteId);
-        return rule ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDeleteId(null)}>
-            <div className="bg-card border border-destructive/30 rounded-xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
-              <h3 className="font-semibold text-foreground text-lg mb-2">Delete Rule?</h3>
-              <p className="text-muted-foreground text-sm mb-1">Are you sure you want to delete:</p>
-              <p className="font-medium text-foreground mb-5">"{rule.name}"</p>
-              <div className="flex gap-3">
-                <button onClick={() => setConfirmDeleteId(null)} className="flex-1 py-2 bg-secondary border border-border rounded-lg text-muted-foreground hover:text-foreground transition-colors text-sm">Cancel</button>
-                <button onClick={() => handleDelete(confirmDeleteId)} className="flex-1 py-2 bg-destructive text-white rounded-lg hover:bg-destructive/80 transition-colors text-sm font-semibold">Delete Rule</button>
-              </div>
+      {confirmDeleteId && canDelete && ruleToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDeleteId(null)}>
+          <div className="bg-card border border-destructive/30 rounded-xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-foreground text-lg mb-2">Delete Rule?</h3>
+            <p className="text-muted-foreground text-sm mb-1">Are you sure you want to delete:</p>
+            <p className="font-medium text-foreground mb-5">"{ruleToDelete.name}"</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDeleteId(null)} className="flex-1 py-2 bg-secondary border border-border rounded-lg text-muted-foreground hover:text-foreground transition-colors text-sm">Cancel</button>
+              <button
+                onClick={() => deleteMutation.mutate(confirmDeleteId)}
+                disabled={deleteMutation.isPending}
+                className="flex-1 py-2 bg-destructive text-white rounded-lg hover:bg-destructive/80 transition-colors text-sm font-semibold flex items-center justify-center gap-2"
+              >
+                {deleteMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                Delete Rule
+              </button>
             </div>
           </div>
-        ) : null;
-      })()}
+        </div>
+      )}
 
       <div className="flex flex-col gap-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -123,7 +139,9 @@ export default function DetectionRulesPage() {
           ].map(s => (
             <div key={s.label} className="bg-card border border-border rounded-xl p-4 shadow-lg">
               <div className="text-xs text-muted-foreground mb-1">{s.label}</div>
-              <div className={`text-2xl font-bold ${s.color || 'text-foreground'}`}>{s.value}</div>
+              <div className={`text-2xl font-bold ${s.color || 'text-foreground'}`}>
+                {isLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : s.value}
+              </div>
             </div>
           ))}
         </div>
@@ -155,82 +173,78 @@ export default function DetectionRulesPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-muted-foreground bg-secondary/50 border-b border-border uppercase tracking-wider">
-                <tr>
-                  <th className="px-5 py-4 font-medium w-16">Status</th>
-                  <th className="px-5 py-4 font-medium">Rule Name</th>
-                  <th className="px-5 py-4 font-medium">Severity</th>
-                  <th className="px-5 py-4 font-medium">MITRE ATT&CK</th>
-                  <th className="px-5 py-4 font-medium">Triggers</th>
-                  <th className="px-5 py-4 font-medium">Last Modified</th>
-                  <th className="px-5 py-4 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/40">
-                {filteredRules.map(rule => (
-                  <tr key={rule.id} className={`transition-colors group ${rule.enabled ? 'hover:bg-secondary/50' : 'opacity-55 bg-secondary/10 hover:bg-secondary/30'}`}>
-                    <td className="px-5 py-4">
-                      {canToggle ? (
-                        <button
-                          onClick={() => toggleRule(rule.id)}
-                          className={`p-1.5 rounded-full transition-all ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 hover:scale-110' : 'text-muted-foreground bg-secondary hover:bg-secondary/80'}`}
-                          title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
-                        >
-                          {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
-                        </button>
-                      ) : (
-                        <span
-                          className={`inline-flex p-1.5 rounded-full ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10' : 'text-muted-foreground bg-secondary'}`}
-                          title={rule.enabled ? 'Enabled' : 'Disabled'}
-                        >
-                          {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="font-medium text-foreground mb-0.5">{rule.name}</div>
-                      <div className="text-xs text-muted-foreground truncate max-w-xs">{rule.description}</div>
-                    </td>
-                    <td className="px-5 py-4"><SeverityBadge severity={rule.severity} /></td>
-                    <td className="px-5 py-4">
-                      <div className="flex gap-1 flex-wrap">
-                        {rule.mitreIds.slice(0, 2).map(id => (
-                          <span key={id} className="text-xs font-mono bg-secondary border border-border/50 px-1.5 py-0.5 rounded text-foreground">{id}</span>
-                        ))}
-                        {rule.mitreIds.length > 2 && <span className="text-xs text-muted-foreground">+{rule.mitreIds.length - 2}</span>}
-                      </div>
-                    </td>
-                    <td className="px-5 py-4 font-mono text-foreground">{rule.triggerCount.toLocaleString()}</td>
-                    <td className="px-5 py-4 text-muted-foreground text-xs">{format(rule.updatedAt, 'MMM dd, yyyy')}</td>
-                    <td className="px-5 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => setViewYamlFor(rule)}
-                          className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors"
-                          title="View YAML"
-                        >
-                          <Code className="w-4 h-4" />
-                        </button>
-                        {canDelete && (
-                          <button
-                            onClick={() => setConfirmDeleteId(rule.id)}
-                            className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                            title="Delete Rule"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" /> Loading rules…
+              </div>
+            ) : (
+              <table className="w-full text-sm text-left">
+                <thead className="text-xs text-muted-foreground bg-secondary/50 border-b border-border uppercase tracking-wider">
+                  <tr>
+                    <th className="px-5 py-4 font-medium w-16">Status</th>
+                    <th className="px-5 py-4 font-medium">Rule Name</th>
+                    <th className="px-5 py-4 font-medium">Severity</th>
+                    <th className="px-5 py-4 font-medium">MITRE ATT&CK</th>
+                    <th className="px-5 py-4 font-medium">Triggers</th>
+                    <th className="px-5 py-4 font-medium">Last Modified</th>
+                    <th className="px-5 py-4 font-medium text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {filteredRules.length === 0 && (
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {filteredRules.map(rule => (
+                    <tr key={rule.id} className={`transition-colors group ${rule.enabled ? 'hover:bg-secondary/50' : 'opacity-55 bg-secondary/10 hover:bg-secondary/30'}`}>
+                      <td className="px-5 py-4">
+                        {canToggle ? (
+                          <button
+                            onClick={() => toggleMutation.mutate({ id: rule.id, enabled: rule.enabled })}
+                            disabled={toggleMutation.isPending}
+                            className={`p-1.5 rounded-full transition-all ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20 hover:scale-110' : 'text-muted-foreground bg-secondary hover:bg-secondary/80'}`}
+                            title={rule.enabled ? 'Disable Rule' : 'Enable Rule'}
+                          >
+                            {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                          </button>
+                        ) : (
+                          <span className={`inline-flex p-1.5 rounded-full ${rule.enabled ? 'text-emerald-400 bg-emerald-400/10' : 'text-muted-foreground bg-secondary'}`}>
+                            {rule.enabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="font-medium text-foreground mb-0.5">{rule.name}</div>
+                        <div className="text-xs text-muted-foreground truncate max-w-xs">{rule.description}</div>
+                      </td>
+                      <td className="px-5 py-4"><SeverityBadge severity={rule.severity} /></td>
+                      <td className="px-5 py-4">
+                        <div className="flex gap-1 flex-wrap">
+                          {rule.mitreIds.slice(0, 2).map(id => (
+                            <span key={id} className="text-xs font-mono bg-secondary border border-border/50 px-1.5 py-0.5 rounded text-foreground">{id}</span>
+                          ))}
+                          {rule.mitreIds.length > 2 && <span className="text-xs text-muted-foreground">+{rule.mitreIds.length - 2}</span>}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 font-mono text-foreground">{rule.triggerCount.toLocaleString()}</td>
+                      <td className="px-5 py-4 text-muted-foreground text-xs">{format(rule.updatedAt, 'MMM dd, yyyy')}</td>
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => setViewYamlFor(rule)} className="p-2 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors" title="View YAML">
+                            <Code className="w-4 h-4" />
+                          </button>
+                          {canDelete && (
+                            <button onClick={() => setConfirmDeleteId(rule.id)} className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors" title="Delete Rule">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {!isLoading && filteredRules.length === 0 && (
               <div className="p-12 text-center text-muted-foreground">
                 <Shield className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                <p className="text-sm">No rules match your current filter.</p>
+                <p className="text-sm">{rules.length === 0 ? 'No detection rules yet. Create your first rule.' : 'No rules match your current filter.'}</p>
               </div>
             )}
           </div>

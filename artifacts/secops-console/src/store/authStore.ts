@@ -64,6 +64,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
 interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
+  isInitialized: boolean;
   isLoading: boolean;
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -77,6 +78,7 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       user: null,
       isAuthenticated: false,
+      isInitialized: false,
       isLoading: false,
 
       login: async (identifier, password) => {
@@ -85,7 +87,7 @@ export const useAuthStore = create<AuthState>()(
           const { data } = await authApi.login(identifier, password);
           localStorage.setItem("access_token", data.accessToken);
           localStorage.setItem("refresh_token", data.refreshToken);
-          set({ user: data.user, isAuthenticated: true, isLoading: false });
+          set({ user: data.user, isAuthenticated: true, isInitialized: true, isLoading: false });
         } catch (err: any) {
           set({ isLoading: false });
           throw err;
@@ -103,14 +105,17 @@ export const useAuthStore = create<AuthState>()(
 
       restoreSession: async () => {
         const token = localStorage.getItem("access_token");
-        if (!token) return;
+        if (!token) {
+          set({ isInitialized: true });
+          return;
+        }
         try {
           const { data } = await authApi.me();
-          set({ user: data.user, isAuthenticated: true });
+          set({ user: data.user, isAuthenticated: true, isInitialized: true });
         } catch {
           localStorage.removeItem("access_token");
           localStorage.removeItem("refresh_token");
-          set({ user: null, isAuthenticated: false });
+          set({ user: null, isAuthenticated: false, isInitialized: true });
         }
       },
 

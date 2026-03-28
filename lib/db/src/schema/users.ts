@@ -1,6 +1,42 @@
-import { pgTable, text, uuid, timestamp, pgEnum, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, timestamp, pgEnum, integer, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+
+export interface UserSettings {
+  timezone: string;
+  notifications: {
+    emailAlerts: boolean;
+    emailDigest: boolean;
+    slackIntegration: boolean;
+    criticalOnly: boolean;
+    newAlerts: boolean;
+    assignedAlerts: boolean;
+    ruleMatches: boolean;
+    weeklyReport: boolean;
+  };
+  security: {
+    mfaEnabled: boolean;
+    sessionTimeout: number;
+  };
+}
+
+export const DEFAULT_USER_SETTINGS: UserSettings = {
+  timezone: "UTC",
+  notifications: {
+    emailAlerts: true,
+    emailDigest: false,
+    slackIntegration: false,
+    criticalOnly: false,
+    newAlerts: true,
+    assignedAlerts: true,
+    ruleMatches: false,
+    weeklyReport: true,
+  },
+  security: {
+    mfaEnabled: false,
+    sessionTimeout: 8,
+  },
+};
 
 export const roleEnum = pgEnum("user_role", [
   "admin",
@@ -23,6 +59,8 @@ export const usersTable = pgTable("users", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: timestamp("locked_until"),
   lastLoginAt: timestamp("last_login_at"),
+  jobTitle: text("job_title"),
+  settings: jsonb("settings").$type<UserSettings>(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
